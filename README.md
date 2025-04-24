@@ -138,7 +138,7 @@ Below are some samples from the datasets. There are 100+ `panorama` or `image st
 ```
 
 ### Cracks change detection datasets
-Image stitching datasets for cracks are available to the public. If you use the dataset related to the cracks in this compilation in your research, please use the following BibTeX entry to cite:
+Image stitching datasets for cracks are made available to the public. If you use the dataset related to the cracks in this compilation in your research, please use the following BibTeX entry to cite:
 ```bibtex
 @PhdThesis{preetham2021vision,
 author = {{Aghalaya Manjunatha}, Preetham},
@@ -159,7 +159,7 @@ note = {Condition assessment, Crack localization, Crack change detection, Synthe
 # Adaptation of open source 
 Bundle adjustment functions in MATLAB are adapted from the [Kevin Luo's GitHub Repo](https://github.com/kluo8128/cs231_project) and heavily improved.
 
-# Licensing conditions
+# Licensing
 The original implementation of the automatic panaroma stitching by Dr. Matthew Brown was written in C++ and patent licensed under the University of British Columbia. This is being programmed and made available to public for academic and research purposes only. Please cite the relevant citations as provided in the main file.
 
 # Acknowledgements
