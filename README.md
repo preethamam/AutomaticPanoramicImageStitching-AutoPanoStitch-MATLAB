@@ -113,7 +113,7 @@ Below are some samples from the datasets. There are 100+ `panorama` or `image st
 
 ## Citation
 ### Original work
-[1]. Brown, Matthew, and David G. Lowe. "Automatic panoramic image stitching using invariant features." International journal of computer vision 74 (2007): 59-73.
+[1]. Brown, Matthew, and David G. Lowe. "Automatic panoramic image stitching using invariant features." International journal of computer vision 74 (2007): 59-73. <br />
 [2]. Brown, Matthew, and David G. Lowe. "Recognising panoramas." In ICCV, vol. 3, p. 1218. 2003.
 
 ```bibtex
