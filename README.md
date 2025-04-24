@@ -137,7 +137,7 @@ Below are some samples from the datasets. There are 100+ `panorama` or `image st
 }
 ```
 
-### Cracks change detction datasets
+### Cracks change detection datasets
 Image stitching datasets for cracks are available to the public. If you use the dataset related to the cracks in this compilation in your research, please use the following BibTeX entry to cite:
 ```bibtex
 @PhdThesis{preetham2021vision,
