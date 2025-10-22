@@ -719,7 +719,7 @@ function cameras = initializeCameraMatrices(input, imageSizes, initialTforms, n_
         % field of view
         focalLengths(:) = max(imageSizes(:, 1:2), [], 2) * 0.8';
         fprintf(['Cannot estimate focal lengths, %s motion model is used! ', ...
-                 'Therefore, using the max(h,w) x 0.8 values.\n'], input.transformationType);
+                 'Therefore, using the max(h,w) x 0.6 values.\n'], input.transformationType);
     end
 
     % Print estimated focal length

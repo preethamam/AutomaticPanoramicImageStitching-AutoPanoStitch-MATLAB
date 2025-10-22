@@ -60,7 +60,7 @@ foldersLen = length(datasetName);
 %--------------------------------------------------------------------------
 % Stitches panoramas
 %--------------------------------------------------------------------------
-for myImg = 25 %20 %1:foldersLen
+for myImg = 5 %20 %1:foldersLen
     stitchStart = tic;
     fprintf('Image number: %i | Current folder: %s\n', myImg, imgFolders(myImg).name);
     
@@ -89,13 +89,18 @@ for myImg = 25 %20 %1:foldersLen
     finalPanoramaTforms = straightening({bundlerTforms});    
     fprintf('Automatic panorama straightening: %f seconds\n', toc(straightentic));
 
-    %% Render panoramas
+    %% Render and display panoramas
     rendertic = tic;    
-    [allPanoramas, croppedPanoramas] = displayPanorama(input, finalPanoramaTforms, finalrefIdxs, images, ...
-                                                       myImg, datasetName);
-    fprintf('Rendering panorama : %f seconds\n', toc(rendertic));
+    [allPanoramas, annotatedPanoramas] = displayPanorama(input, finalPanoramaTforms, finalrefIdxs, images);
+    fprintf('Rendering and display time : %f seconds\n', toc(rendertic));
+
+    %% Crop and save panoramas
+    cropsavetic = tic;    
+    croppedPanoramas = cropNsavePanorama(input, allPanoramas, annotatedPanoramas, myImg, datasetName);
+    fprintf('Crop and save time : %f seconds\n', toc(cropsavetic));
+
     fprintf('Total runtime (stitching) : %f seconds\n', toc(stitchStart));
-    fprintf('--------------------------------\n\n', toc); %#ok<CTPCT>        
+    fprintf('----------------------------------------------------------------\n\n', toc); %#ok<CTPCT>        
 end
 
 %% End parameters

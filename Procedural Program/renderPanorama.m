@@ -42,6 +42,10 @@ if ~isfield(opts,'compose_none_policy'), opts.compose_none_policy = 'last'; end
 % "maxangle": pick the single camera with the largest view-angle weight (still no blending; weight only decides which source wins).
 if ~isfield(opts,'showPanoramaImgsNums'), opts.showPanoramaImgsNums = false; end
 if ~isfield(opts,'showCropBoundingBox'), opts.showCropBoundingBox = false; end
+if ~isfield(opts,'blend_device'), opts.blend_device = 'auto'; end  % 'gpu'|'cpu'|'auto'
+if ~isfield(opts,'tile_min'),     opts.tile_min     = [512 768];  end % lower bound for tiling
+if ~isfield(opts,'gpu_mem_frac'), opts.gpu_mem_frac = 0.55;       end % keep peak <55% free mem
+
 
 N = numel(images);
 imgSize = zeros(N,2);
@@ -133,6 +137,32 @@ switch lower(mode)
     otherwise
         error('mode must be cylindrical, spherical, or planar/perspective');
 end
+
+% ---- Auto tiler based on GPU memory + K contributors ----
+if isempty(opts.tile)
+    % approximate worst-case bytes per tile on GPU during multiband:
+    % per-image: ~ 4 bytes * (h*w*(C + 1))  (color + weight at base level)
+    % plus transient for pyr building; multiply by ~ (1 + 1/4 + 1/16 + ...) ≈ 1.33
+    Kmax = numel(images); Cc = 3; scale = 1.33; 
+    bytes_per_px_per_img = 4*(Cc+1)*scale; % single precision
+    peak_budget = inf;
+    if opts.use_gpu && (gpuDeviceCount>0)
+        g = gpuDevice;
+        peak_budget = opts.gpu_mem_frac * g.AvailableMemory;  % bytes we can safely use
+    end
+    % choose tile so that Kmax * bytes_per_px_per_img * (tileH*tileW) <= peak_budget/2  (headroom)
+    if isfinite(peak_budget)
+        px_budget = floor(0.5 * double(peak_budget) / (Kmax * bytes_per_px_per_img));
+        side = max( min( floor(sqrt(px_budget)), min(H,W) ),  min(opts.tile_min) );
+        tileH = max(opts.tile_min(1), min(H, side));
+        tileW = max(opts.tile_min(2), min(W, side));
+        opts.tile = [tileH tileW];
+    else
+        % CPU or unknown GPU mem: still tile a bit for safety
+        opts.tile = max(opts.tile_min, [min(H,2048) min(W,2048)]);
+    end
+end
+
 
 % -------- 2) Precompute WORLD direction grid --------
 [xp, yp] = meshgrid(single(0:W-1), single(0:H-1));
@@ -340,6 +370,41 @@ case 'multiband'
             for k = 1:numel(Wi_tile), Wsum_tile = Wsum_tile + Wi_tile{k}; end
             covered(rr, cc) = covered(rr, cc) | (Wsum_tile > 0);
             
+            % Decide blending device for this tile
+            useGPUBlend = onGPU;
+            if strcmpi(opts.blend_device,'cpu'), useGPUBlend = false; end
+            if strcmpi(opts.blend_device,'auto')
+                useGPUBlend = onGPU;
+                if onGPU
+                    g = gpuDevice;
+                    % Heuristic: if (tile px * K contributors) is large relative to free mem, switch to CPU
+                    Ktile = numel(Wi_tile);
+                    tile_px = numel(rr) * numel(cc);
+                    need_bytes = 4 * 1.33 * Ktile * tile_px * 4;  % ~ 4 channels worth of temps
+                    if need_bytes > 0.45 * g.AvailableMemory
+                        useGPUBlend = false;
+                    end
+                end
+            end
+
+            % Optionally bring Ci/Wi to CPU for blend (sampling can stay on GPU)
+            if ~useGPUBlend
+                for kk=1:numel(Ci_tile)
+                    if isa(Ci_tile{kk},'gpuArray'), Ci_tile{kk} = gather(Ci_tile{kk}); end
+                    if isa(Wi_tile{kk},'gpuArray'), Wi_tile{kk} = gather(Wi_tile{kk}); end
+                end
+            end
+
+
+            % --- Harmonize per-image tile inputs (defensive) ---
+            for kk = 1:numel(Ci_tile)
+                [hC,wC,~] = size(Ci_tile{kk});
+                [hW,wW]   = size(Wi_tile{kk});
+                if hC~=hW || wC~=wW
+                    Wi_tile{kk} = imresize(Wi_tile{kk}, [hC wC], 'bilinear');
+                end
+            end
+
             % Fuse this tile
             F_tile = multiBandBlending(Ci_tile, Wi_tile, opts.pyr_levels, onGPU, opts.pyr_sigma);
             panorama(rr, cc, :) = F_tile;

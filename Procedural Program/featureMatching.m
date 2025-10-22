@@ -48,8 +48,7 @@ function matches = getMatches(input,features1,features2)
         'ApproxNumTables', input.ApproxNumTables, ...
         'ApproxBitsPerKey', input.ApproxBitsPerKey, ...
         'ApproxProbes', input.ApproxProbes, ...
-        'ApproxKDBucketSize', 40);
-    
-        matches = double(matches)';    
+        'ApproxKDBucketSize', 40);            
     end
+    matches = double(matches)';    
 end

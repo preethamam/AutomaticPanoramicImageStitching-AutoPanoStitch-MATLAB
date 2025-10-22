@@ -44,9 +44,9 @@ input.EdgeThreshold = 6;                % Edge threshold, specified as a non-neg
                                         % The threshold is used to filter out unstable edge-like features  -- SIFT only
 
 % Features matching 
-input.useMATLABFeatureMatch = 0;        % Use MATLAB default matchFeatures function: 0-off | 1-on
+input.useMATLABFeatureMatch = 1;        % Use MATLAB default matchFeatures function: 0-off | 1-on
 input.Matchingmethod = 'Approximate';   % 'Exhaustive' (default) | 'Approximate'
-input.Matchingthreshold = 3.5;          % 10.0 or 1.0 (default) | percent value in the range (0, 100] | depends on 
+input.Matchingthreshold = 1.5;          % 10.0 or 1.0 (default) | percent value in the range (0, 100] | depends on 
                                         % binary and non-binary features. Default: 3.5. Increase this to >= 10 for binary features
 input.Ratiothreshold = 0.6;             % ratio in the range (0,1]
 input.ApproxNumTables = 8;
@@ -54,7 +54,7 @@ input.ApproxBitsPerKey = 24;            % for 256-bit ORB; 32 is also fine
 input.ApproxProbes =  8;
 
 % Image matching (RANSAC/MLESAC)            MLESAC - recommended
-input.useMATLABImageMatching = 0;           % Use MATLAB default estgeotform2d function: 0-off | 1-on
+input.useMATLABImageMatching = 1;           % Use MATLAB default estgeotform2d function: 0-off | 1-on
 input.imageMatchingMethod = 'ransac';       % 'ransac' | 'mlesac'. RANSAC or MLESAC. Both gives consistent matches. 
                                             % MLESAC - recommended. As it has some tight bounds and validation checks.
                                             
@@ -95,4 +95,5 @@ input.showKeypointsPlot  = 0;       % Display keypoints plot (parfor suppresses 
 input.displayPanoramas = 1;         % Display panoramas in figure
 input.showPanoramaImgsNums = 0;     % Display the panorama images with numbers after tranform 0 or 1
 input.showCropBoundingBox = 0;      % Display cropping bounding box 0 | 1
+input.cropPanorama = 0;               % Write panorama image to disk 0 | 1
 input.imageWrite = 0;               % Write panorama image to disk 0 | 1
