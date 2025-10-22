@@ -1,5 +1,5 @@
 # AutoPanoStitch
-[![View Automatic panorama stitcher (AutoPanoStitch) on File Exchange](https://www.mathworks.com/matlabcentral/images/matlab-file-exchange.svg)](https://www.mathworks.com/matlabcentral/fileexchange/105850-automatic-panorama-stitcher-autopanostitch) [![Open in MATLAB Online](https://www.mathworks.com/images/responsive/global/open-in-matlab-online.svg)](https://matlab.mathworks.com/open/github/v1?repo=preethamam/AutomaticPanoramicImageStitching-AutoPanoStitch)
+[![View Automatic panorama stitcher (AutoPanoStitch) on File Exchange](https://www.mathworks.com/matlabcentral/images/matlab-file-exchange.svg)](https://www.mathworks.com/matlabcentral/fileexchange/105850-automatic-panorama-stitcher-autopanostitch) [![Open in MATLAB Online](https://www.mathworks.com/images/responsive/global/open-in-matlab-online.svg)](https://matlab.mathworks.com/open/github/v1?repo=preethamam/AutomaticPanoramicImageStitching-AutoPanoStitch-MATLAB)
 
 Automatic Panorama Stitching software in MATLAB. Spherical, cyclindrical and planar projections stitching is supported in this version and can recognize multiple panoramas.
 
@@ -18,10 +18,10 @@ Automatic Panorama Stitching software in MATLAB. Spherical, cyclindrical and pla
 
 # Requirements
 MATLAB <br />
-MATLAB Computer Vision Toolbox <br />
-MATLAB Image Processing Toolbox <br />
-MATLAB Parallel Computing Toolbox <br />
-MATLAB Optimization Toolbox
+Computer Vision Toolbox <br />
+Image Processing Toolbox <br />
+Parallel Computing Toolbox <br />
+Optimization Toolbox
 
 # Run command
 Please use the `Main_AutoPanoStitch.m` to run the program. Change the `folderPath      = '../../../Data/Generic';` to your desired folder path. Also, change the `folderName      = '';` to a valid name. You can download the whole Generic folder datasets in [AutoPanoStitch Stitching Datasets Compilation](https://1drv.ms/f/s!AlFYM4jwmzqrtaBpxVMpJegvN9QVZw?e=UIaYug).
@@ -97,11 +97,11 @@ Depending on how your images are captured, panaroma being a `spherical`, `cylind
 Currently, spherical, cyclindrical and planar projections stitching is supported in this version and can recognize multiple panoramas. This work is in progress, further improvements such as the inclusion of a full view `360 x 180-degree` panoramas stitching (everything visible from a point), automatic panorama straightening, runtime speed optimization and Graphical User Interface (GUI) are under development. Your patience will be appreciated.
 
 # Image stitching/panorama datasets
-Creating image stitching datasets takes a lot of time and effort. During my Ph.D. days, I tried to compile datasets that were comprehensive to have `spherical`, `cylindrical` or `planar` and full view `360 x 180-degree` panoramas. These datasets posed a real challenge to the automatic stitching method. If all these datasets are stitched well, it definitely shows the robustness of your stitching method.
+Creating image stitching datasets takes a lot of time and effort. During my Ph.D. days, I tried to compile datasets that were comprehensive to have `spherical`, `cylindrical`, `planar` and full view `360 x 180-degree` panoramas. These datasets posed a real challenge to the automatic stitching method. If all these datasets are stitched well, it definitely shows the robustness of your stitching method.
 
 All these datasets are public! Some of them were from my Ph.D. studies (especially on cracks) and most of them were downloaded from the internet. I do not remember the individual names of the dataset providers. But I acknowledge their work and I am thankful to all of them! I hope you appreciate their efforts in making these datasets public to advance the research!
 
-Below are some samples from the datasets. There are 100+ `panorama` or `image stitching/registration` datasets in total. You can download them in [AutoPanoStitch Stitching Datasets Compilation](https://1drv.ms/f/s!AlFYM4jwmzqrtaBpxVMpJegvN9QVZw?e=UIaYug). Please note that this dataset compilation is more for the qualitative analysis of the image stitching problem. For quantitative analaysis, I recommend using [Quantitative Image Stitching Datasets](https://github.com/visionxiang/Image-Stitching-Dataset). If I come across any interesting and challenging datasets, I will expand this compilation.
+Below are some samples from the datasets. There are 100+ `panorama` or `image stitching/registration` datasets in total. You can download them in [AutoPanoStitch Stitching Datasets Compilation](https://1drv.ms/f/s!AlFYM4jwmzqrtaBpxVMpJegvN9QVZw?e=UIaYug). Please note that this dataset compilation is more aligned towards the qualitative analysis of the image stitching problem. For quantitative analaysis, I recommend using [Quantitative Image Stitching Datasets](https://github.com/visionxiang/Image-Stitching-Dataset). If I come across any interesting and challenging datasets, I will expand this compilation.
 | Type | Images |
 | --- | --- |
 | CMU | ![dataset_samples_CMU0](assets/dataset_samples_CMU0.png) |
@@ -112,7 +112,33 @@ Below are some samples from the datasets. There are 100+ `panorama` or `image st
 | Rio | ![dataset_samples_rio](assets/dataset_samples_rio.png) |
 
 ## Citation
-Image stitching datasets for cracks are available to the public. If you use the dataset related to the cracks in this compilation in your research, please use the following BibTeX entry to cite:
+### Original work
+[1]. Brown, Matthew, and David G. Lowe. "Automatic panoramic image stitching using invariant features." International journal of computer vision 74 (2007): 59-73. <br />
+[2]. Brown, Matthew, and David G. Lowe. "Recognising panoramas." In ICCV, vol. 3, p. 1218. 2003.
+
+```bibtex
+@article{brown2007automatic,
+  title={Automatic panoramic image stitching using invariant features},
+  author={Brown, Matthew and Lowe, David G},
+  journal={International journal of computer vision},
+  volume={74},
+  pages={59--73},
+  year={2007},
+  publisher={Springer}
+}
+
+@inproceedings{brown2003recognising,
+  title={Recognising panoramas.},
+  author={Brown, Matthew and Lowe, David G and others},
+  booktitle={ICCV},
+  volume={3},
+  pages={1218},
+  year={2003}
+}
+```
+
+### Cracks change detection datasets
+Image stitching datasets for cracks are made available to the public. If you use the dataset related to the cracks in this compilation in your research, please use the following BibTeX entry to cite:
 ```bibtex
 @PhdThesis{preetham2021vision,
 author = {{Aghalaya Manjunatha}, Preetham},
@@ -133,11 +159,11 @@ note = {Condition assessment, Crack localization, Crack change detection, Synthe
 # Adaptation of open source 
 Bundle adjustment functions in MATLAB are adapted from the [Kevin Luo's GitHub Repo](https://github.com/kluo8128/cs231_project) and heavily improved.
 
-# Licensing conditions
-The original implementation of the automatic panaroma stitching by Dr. Brown was written in C++ and is `LICENSED under The University of British Columbia`. This is being programmed and made available to public for academic / research purposes only. Please cite the relevant citations as provided in the main file.
+# Licensing
+The original implementation of the automatic panaroma stitching by Dr. Matthew Brown was written in C++ and patent licensed under the University of British Columbia. This is being programmed and made available to public for academic and research purposes only. Please cite the relevant citations as provided in the main file.
 
 # Acknowledgements
-To all the authors who made the image stitching datasets public.
+I express my sincere gratitude to Dr. Matthew Brown for his invaluable time in discussion and who provided clarifications on many questions. In addition, I am thankful to all the authors who made their image stitching datasets public.
 
 # Feedback
 Please rate and provide feedback for the further improvements.
