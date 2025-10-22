@@ -21,35 +21,21 @@ MATLAB <br />
 Computer Vision Toolbox <br />
 Image Processing Toolbox <br />
 Parallel Computing Toolbox <br />
-Optimization Toolbox
 
 # Run command
 Please use the `Main_AutoPanoStitch.m` to run the program. Change the `folderPath      = '../../../Data/Generic';` to your desired folder path. Also, change the `folderName      = '';` to a valid name. You can download the whole Generic folder datasets in [AutoPanoStitch Stitching Datasets Compilation](https://1drv.ms/f/s!AlFYM4jwmzqrtaBpxVMpJegvN9QVZw?e=UIaYug).
 
 Change the hyper parameters accordingly if needed. But it is not required though.
 ```
-%% Inputs 2
-%--------------------------------------------------------------------------
-% Parallel workers
-input.numCores = str2double(getenv('NUMBER_OF_PROCESSORS'));    % Number of cores for parallel processing
-input.poolType = 'numcores';     % 'numcores' | 'Threads'
-
 %% Inputs 3
 % Warping
-input.warpType = 'planar';   % 'spherical' | 'cylindrical' | 'planar' (projective)
+input.warpType = 'cylindrical';   % 'planar' | 'cylindrical' | 'spherical'
 
-% Focal length
-input.fx = 2000;       % focal length of camera in pixels
-input.fy = 2000;       % focal length of camera in pixels
+% Lens distortion coefficients [k1, k2, k3, p1, p2]
+input.distCoeffs = [0, 0, 0, 0, 0];
 
-% Distortion coefficients [k1, k2, k3, p1, p2]
-input.DC = [0, 0, 0, 0, 0];
-
-% Feature matching
-input.detector = 'SIFT';                % 'HARRIS' | 'SIFT' | 'vl_SIFT' | 'FAST' | 'SURF' | 'BRISK' | 'ORB' | 'KAZE'
-input.Matchingthreshold = 3.5;          % 10.0 or 1.0 (default) | percent value in the range (0, 100] | depends on 
-                                        % binary and non-binary features
-input.Ratiothreshold = 0.6;             % ratio in the range (0,1]
+% Feature extraction (SIFT recommended as you get large number of consistent features)
+input.detector = 'SIFT';                % 'SIFT' | 'vl_SIFT' | 'HARRIS' | 'FAST' | 'SURF' | 'BRISK' | 'ORB' | 'KAZE'
 input.Sigma = 1.6;                      % Sigma of the Gaussian (1.4142135623)
 input.NumLayersInOctave = 4;            % Number of layers in each octave -- SIFT only
 input.ContrastThreshold = 0.00133;      % Contrast threshold for selecting the strongest features, 
@@ -57,38 +43,61 @@ input.ContrastThreshold = 0.00133;      % Contrast threshold for selecting the s
                                         % The threshold is used to filter out weak features in 
                                         % low-contrast regions of the image. -- SIFT only
 input.EdgeThreshold = 6;                % Edge threshold, specified as a non-negative scalar greater than or equal to 1. 
-                                        % The threshold is used to filter out unstable edge-like features  -- SIFT only  
-input.nearestFeaturesNum = 5;           % Nearest images minimum number of features to filter
-                                        % distant image matches (filter gain overlap images to reduce complexity)
+                                        % The threshold is used to filter out unstable edge-like features  -- SIFT only
 
-% Image matching (RANSAC)
-input.Matchingmethod = 'Approximate';   %'Exhaustive' (default) | 'Approximate'
-input.Inliersconfidence = 99.9;         % Inlier confidence [0,100]
-input.maxIter = 2000;                   % RANSAC maximum iterations
-input.Transformationtype = 'affine';     % 'rigid' | 'similarity' | 'affine' | 'projective' | 'translation'
-input.MaxDistance = 1.50;               % Maximum distance (pixels) 1.5
+% Features matching 
+input.useMATLABFeatureMatch = 0;        % Use MATLAB default matchFeatures function: 0-off | 1-on
+input.Matchingmethod = 'Approximate';   % 'Exhaustive' (default) | 'Approximate'
+input.Matchingthreshold = 3.5;          % 10.0 or 1.0 (default) | percent value in the range (0, 100] | depends on 
+                                        % binary and non-binary features. Default: 3.5. Increase this to >= 10 for binary features
+input.Ratiothreshold = 0.6;             % ratio in the range (0,1]
+input.ApproxNumTables = 8;
+input.ApproxBitsPerKey = 24;            % for 256-bit ORB; 32 is also fine
+input.ApproxProbes =  8;
 
-% Image blending and panorama
-input.gainDerivation = 1;           % Two types of gain matrix derivations 1 or 2 (both leads to same results with some roundoffs)
+% Image matching (RANSAC/MLESAC)            MLESAC - recommended
+input.useMATLABImageMatching = 0;           % Use MATLAB default estgeotform2d function: 0-off | 1-on
+input.imageMatchingMethod = 'ransac';       % 'ransac' | 'mlesac'. RANSAC or MLESAC. Both gives consistent matches. 
+                                            % MLESAC - recommended. As it has some tight bounds and validation checks.
+                                            
+                                            % RANSAC execution time for projective case is ~1.35 times higher than MLESAC.
+input.maxIter = 500;                        % RANSAC/MLESAC maximum iterations
+input.maxDistance = 2.5;                    % Maximum distance (pixels) increase this to get more matches. Default: 1.5
+                                            % For large image RANSAC/MLESAC requires maxDistance 1-3 pixels 
+                                            % more than the default value of 1.5 pixels.
+input.inliersConfidence = 99.9;             % Inlier confidence [0, 100]
+input.transformationType = 'projective';    % Motion model: 'projective' | 'affine' | 'similarity' | 'rigid' | 'translation'
+
+% Bundle adjustment (BA)
+input.maxIterLM = 100;
+input.lambda = 1e-3;
+input.sigma_theta = pi/16;
+input.rotmTolerance = 1e-9;             % Small epsilon value for numerical stability of rotation matrix
+
+% Gain compensation
 input.sigmaN = 10;                  % Standard deviations of the normalised intensity error
-input.sigmag = 0.01;                % Standard deviations of the gain
-input.resizeImage = 1;              % Resize input images
-input.resizeStitchedImage = 1;      % Resize stitched image
-input.maxPanoramaArea = 3e6;        % Maximum panorama area
+input.sigmag = 0.1;                 % Standard deviations of the gain
+input.nearestFeaturesNum = 5;       % Nearest images minimum number of features to filter
+                                    % distant image matches (filter gain overlap images to reduce time complexity)
+
+% Blending
 input.blending = 'multiband';       % 'multiband' | 'linear' | 'none'
-input.bands = 6;                    % bands
-input.MBBsigma = 5;                 % Multi-band Gaussian sigma
-input.filtSize = [5,5];             % Gaussian kernel Filter size
-input.parforSummation = true;       % Gain diagonal elements summation by parfor
-input.showPanoramaImgsNums = 0;     % display the panorama images with numbers after tranform 0 or 1
+input.bands = 2;                    % bands (2 - 6 is enough)
+input.MBBsigma = 1;                 % Multi-band Gaussian sigma
+
+% Rendering panorama
+input.resizeImage = 1;              % Resize input images
+input.resizeStitchedImage = 0;      % Resize stitched image
 
 % Post-processing
 input.canvas_color = 'black';       % Panorama canvas color 'black' | 'white'
-input.showCropBoundingBox = 1;      % Display cropping bounding box 0 | 1
 input.blackRange = 0;               % Minimum dark pixel value to crop panaroma
 input.whiteRange = 250;             % Minimum bright pixel value to crop panaroma
 input.showKeypointsPlot  = 0;       % Display keypoints plot (parfor suppresses this flag, so no use)
-input.displayPanoramas = 0;         % Display panoramas in figure
+input.displayPanoramas = 1;         % Display panoramas in figure
+input.showPanoramaImgsNums = 0;     % Display the panorama images with numbers after tranform 0 or 1
+input.showCropBoundingBox = 0;      % Display cropping bounding box 0 | 1
+input.imageWrite = 0;               % Write panorama image to disk 0 | 1
 ```
 
 # Note
@@ -151,13 +160,6 @@ month = {December},
 note = {Condition assessment, Crack localization, Crack change detection, Synthetic crack generation, Sewer pipe condition assessment, Mechanical systems defect detection and quantification}
 }
 ```
-
-# Known issues
-1. Bundle adjustment using the `lsqnonlin` in MATLAB is computationally slow.
-2. Panoramic images needs to be straightened, some of the panoramas will be skewed.
-
-# Adaptation of open source 
-Bundle adjustment functions in MATLAB are adapted from the [Kevin Luo's GitHub Repo](https://github.com/kluo8128/cs231_project) and heavily improved.
 
 # Licensing
 The original implementation of the automatic panaroma stitching by Dr. Matthew Brown was written in C++ and patent licensed under the University of British Columbia. This is being programmed and made available to public for academic and research purposes only. Please cite the relevant citations as provided in the main file.
