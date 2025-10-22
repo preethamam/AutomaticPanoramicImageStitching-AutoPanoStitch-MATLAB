@@ -13,6 +13,10 @@ function [panorama, rgbAnnotation] = renderPanorama(images, cameras, mode, ref_i
 %   - cyl_bounds_dense_fast, sph_bounds_dense_fast, plan_bounds_dense_fast (below)
 %   - fast_sample_block (interp2-based sampler)
 %   - crop_nonzero_bbox (optional crop)
+% mode: 'cylindrical' | 'spherical' | 'planar' | 'stereographic' | 'equirectangular'
+% Notes:
+%   - 'spherical' and 'equirectangular' are identical here (lon/lat mapping).
+%   - 'stereographic' is a fisheye-like projection centered on ref view.
 
 if nargin<5, opts=struct(); end
 if ~isfield(opts,'f_pan'),       opts.f_pan       = cameras(ref_idx).K(1,1); end
@@ -133,6 +137,47 @@ switch lower(mode)
     
         u0 = u_min; v0 = v_min;  % lower-left in plane coords
 
+    case {'equirectangular'}   % alias of spherical
+        [th_min, th_max, ph_min, ph_max] = spherical_bounds(cameras, imgSize);
+        dt = th_max - th_min; dp = ph_max - ph_min;
+        th_min = th_min - opts.margin*dt; th_max = th_max + opts.margin*dt;
+        ph_min = ph_min - opts.margin*dp; ph_max = ph_max + opts.margin*dp;
+
+        W = max(1, ceil(opts.f_pan * (th_max - th_min) * opts.res_scale));
+        H = max(1, ceil(opts.f_pan * (ph_max - ph_min) * opts.res_scale));
+
+        th0 = th_min; ph0 = ph_min;
+
+    case 'stereographic'
+        % Bounds on the stereographic plane (relative to the reference camera)
+        Rref = cameras(ref_idx).R;  % world->ref
+        [a_min, a_max, b_min, b_max] = stereographic_bounds( ...
+            cameras, imgSize, Rref, opts.robust_pct, opts.uv_abs_cap);
+
+        da = a_max - a_min; db = b_max - b_min;
+        a_min = a_min - opts.margin*da; a_max = a_max + opts.margin*da;
+        b_min = b_min - opts.margin*db; b_max = b_max + opts.margin*db;
+
+        % pixel padding in plane units
+        a_min = a_min - opts.pix_pad / opts.f_pan;
+        a_max = a_max + opts.pix_pad / opts.f_pan;
+        b_min = b_min - opts.pix_pad / opts.f_pan;
+        b_max = b_max + opts.pix_pad / opts.f_pan;
+
+        W = max(1, ceil(opts.f_pan * (a_max - a_min) * opts.res_scale));
+        H = max(1, ceil(opts.f_pan * (b_max - b_min) * opts.res_scale));
+
+        % global pixel cap (same as planar)
+        max_px = round(opts.max_megapix*1e6);
+        HW_est = double(H)*double(W);
+        if HW_est > max_px
+            s = sqrt(max_px / HW_est);
+            opts.res_scale = opts.res_scale * s;
+            W = max(1, ceil(opts.f_pan * (a_max - a_min) * opts.res_scale));
+            H = max(1, ceil(opts.f_pan * (b_max - b_min) * opts.res_scale));
+        end
+
+        u0 = a_min; v0 = b_min;   % stereographic plane origin (same naming as planar)
 
     otherwise
         error('mode must be cylindrical, spherical, or planar/perspective');
@@ -196,6 +241,33 @@ switch lower(mode)
         dwx =  Rref(1,1).*dx_ref + Rref(2,1).*dy_ref + Rref(3,1).*dz_ref;
         dwy =  Rref(1,2).*dx_ref + Rref(2,2).*dy_ref + Rref(3,2).*dz_ref;
         dwz =  Rref(1,3).*dx_ref + Rref(2,3).*dy_ref + Rref(3,3).*dz_ref;
+
+    case 'equirectangular'   % identical to 'spherical'
+        theta = single(th0) + xp/single(opts.f_pan);
+        phi   = single(ph0) + yp/single(opts.f_pan);
+        cphi  = cos(phi); sphi = sin(phi);
+        dwx = -cphi.*sin(theta);
+        dwy = -sphi;
+        dwz =  cphi.*cos(theta);
+
+    case 'stereographic'
+        % Plane coords in the reference camera's stereographic plane
+        % (tangent at +Z, projected from -Z). a=u, b=v in "plane units".
+        a = single(u0) + xp/single(opts.f_pan);
+        b = single(v0) + yp/single(opts.f_pan);
+        r2 = a.*a + b.*b;
+        denom = (1 + r2);
+
+        % unit direction in REF camera frame
+        dx_ref = 2*a ./ denom;
+        dy_ref = 2*b ./ denom;
+        dz_ref = (1 - r2) ./ denom;
+
+        % convert to WORLD directions: dir_w = Rref' * dir_ref (use columns of Rref)
+        Rref = single(cameras(ref_idx).R);  % world->ref
+        dwx =  Rref(1,1).*dx_ref + Rref(2,1).*dy_ref + Rref(3,1).*dz_ref;
+        dwy =  Rref(1,2).*dx_ref + Rref(2,2).*dy_ref + Rref(3,2).*dz_ref;
+        dwz =  Rref(1,3).*dx_ref + Rref(2,3).*dy_ref + Rref(3,3).*dz_ref;
     
     otherwise
         error('mode must be cylindrical, spherical, or planar/perspective');
@@ -207,13 +279,13 @@ srcW = warpWeights(images, N);
 
 if opts.gain_compensation
     switch lower(mode)
-        case {'planar','perspective'}
+        case {'planar','perspective','stereographic'}
             gains = gainCompensation(images, cameras, mode, ref_idx, opts, ...
                                           H, W, u0, v0, [], [], [], srcW);
         case 'cylindrical'
             gains = gainCompensation(images, cameras, mode, ref_idx, opts, ...
                                           H, W, [], [], th0, h0, [], srcW);
-        case 'spherical'
+        case {'spherical','equirectangular'}
             gains = gainCompensation(images, cameras, mode, ref_idx, opts, ...
                                           H, W, [], [], th0, [], ph0, srcW);
         otherwise
@@ -445,13 +517,13 @@ dx = c1 - 1;        dy = r1 - 1;            % shift to apply to x/y
 rgbAnnotation = [];
 if opts.showPanoramaImgsNums && opts.showCropBoundingBox
     switch lower(mode)
-        case {'planar','perspective'}
+        case {'planar','perspective','stereographic'}
             [xBoxes, yBoxes, centers] = all_warped_boxes(...
                 images, cameras, mode, ref_idx, opts, u0,v0,[],[],[]);
         case 'cylindrical'
             [xBoxes, yBoxes, centers] = all_warped_boxes(...
                 images, cameras, mode, ref_idx, opts, [],[],th0,h0,[]);
-        case 'spherical'
+        case {'spherical','equirectangular'}
             [xBoxes, yBoxes, centers] = all_warped_boxes(...
                 images, cameras, mode, ref_idx, opts, [],[],th0,[],ph0);
     end
@@ -545,23 +617,46 @@ function [xPoly, yPoly, centroid] = warped_box_in_pano(imageSize, cam, mode, ...
     
     % Map world ray to panorama coords (u,v) or (theta,h) or (theta,phi)
     switch lower(mode)
-     case 'planar'
-      Rref = cameras(ref_idx).R;
-      ray_r = Rref * ray_w;  zr = ray_r(3,:);
-      ur = ray_r(1,:)./zr;   vr = ray_r(2,:)./zr; % plane coords
-      x = (ur - u0) * f_pan; y = (vr - v0) * f_pan;
+         case 'planar'
+              Rref = cameras(ref_idx).R;
+              ray_r = Rref * ray_w;  zr = ray_r(3,:);
+              ur = ray_r(1,:)./zr;   vr = ray_r(2,:)./zr; % plane coords
+              x = (ur - u0) * f_pan; y = (vr - v0) * f_pan;
+        
+         case 'cylindrical'
+              xw=ray_w(1,:); yw=ray_w(2,:); zw=ray_w(3,:);
+              theta = -atan2(xw,zw); h = - yw ./ hypot(xw,zw);
+              x = (theta - th0) * f_pan; y = (h - h0) * f_pan;
+        
+         case 'spherical'
+              xw=ray_w(1,:); yw=ray_w(2,:); zw=ray_w(3,:);
+              theta = -atan2(xw,zw); phi = atan2(-yw, hypot(xw,zw));
+              x = (theta - th0) * f_pan; y = (phi - ph0) * f_pan;
     
-     case 'cylindrical'
-      xw=ray_w(1,:); yw=ray_w(2,:); zw=ray_w(3,:);
-      theta = -atan2(xw,zw); h = - yw ./ hypot(xw,zw);
-      x = (theta - th0) * f_pan; y = (h - h0) * f_pan;
+          case 'equirectangular'   % alias of 'spherical'
+              xw=ray_w(1,:); yw=ray_w(2,:); zw=ray_w(3,:);
+              theta = -atan2(xw,zw); phi = atan2(-yw, hypot(xw,zw));
+              x = (theta - th0) * f_pan; y = (phi - ph0) * f_pan;
     
-     case 'spherical'
-      xw=ray_w(1,:); yw=ray_w(2,:); zw=ray_w(3,:);
-      theta = -atan2(xw,zw); phi = atan2(-yw, hypot(xw,zw));
-      x = (theta - th0) * f_pan; y = (phi - ph0) * f_pan;
-    
-     otherwise, error('mode');
+         case 'stereographic'
+              % Project to the reference camera frame first
+              Rref = cameras(ref_idx).R;
+              ray_r = Rref * ray_w;                        % to ref camera frame
+              % normalize direction
+              nr = sqrt(sum(ray_r.^2,1));
+              xr = ray_r(1,:)./nr;  yr = ray_r(2,:)./nr;  zr = ray_r(3,:)./nr;
+        
+              % Stereographic forward map (plane tangent at +Z; project from -Z):
+              % a = x / (1 + z),  b = y / (1 + z)
+              denom = 1 + zr;
+              % guard degenerate (z ~ -1)
+              denom = max(denom, 1e-6);
+              a = xr ./ denom;
+              b = yr ./ denom;
+        
+              x = (a - u0) * f_pan;
+              y = (b - v0) * f_pan;
+         otherwise, error('mode');
     end
     
     xPoly = [x, x(1)]; yPoly = [y, y(1)];
@@ -815,3 +910,75 @@ if ~isfinite(v_min) || ~isfinite(v_max) || v_min>=v_max
     v_min = -1; v_max = 1;
 end
 end
+
+function [a_min, a_max, b_min, b_max] = stereographic_bounds( ...
+        cams, imgSize, Rref, robust_pct, abs_cap)
+% Robust bounds on the stereographic plane (tangent at +Z_ref; projected from -Z_ref).
+% - Transform rays into the REF camera frame
+% - Normalize to unit directions
+% - Forward stereographic map: a = x/(1+z), b = y/(1+z)
+% - Percentile-clip per camera, then take global min/max
+% - Hard cap |a|,|b| by abs_cap (similar spirit to planar uv_abs_cap)
+
+a_min =  inf; a_max = -inf;
+b_min =  inf; b_max = -inf;
+
+nx = 48; ny = 32;     % interior grid
+ne = 512;             % dense borders
+
+parfor i = 1:numel(cams)
+    H = imgSize(i,1); W = imgSize(i,2);
+
+    % interior samples
+    xs = linspace(1,W,nx); ys = linspace(1,H,ny);
+    [U,V] = meshgrid(xs,ys); u = U(:)'; v = V(:)';
+
+    % border samples
+    xb = linspace(1,W,ne); yb = linspace(1,H,ne);
+    u_b = [xb, xb,           ones(1,ne),   W*ones(1,ne)];
+    v_b = [ones(1,ne), H*ones(1,ne), yb,   yb         ];
+
+    u = [u, u_b];  v = [v, v_b];
+
+    xy1   = [u; v; ones(1,numel(u),'like',u)];
+    ray_c = cams(i).K \ xy1;        % camera frame (not unit)
+    ray_w = cams(i).R' * ray_c;     % to world
+    ray_r = Rref * ray_w;           % to ref frame
+
+    % normalize to unit directions
+    nr = sqrt(sum(ray_r.^2,1));
+    xr = ray_r(1,:)./nr;  yr = ray_r(2,:)./nr;  zr = ray_r(3,:)./nr;
+
+    % stereographic forward map (plane tangent at +Z; project from -Z)
+    denom = 1 + zr;
+    % avoid explosion near zr ~ -1 (those go to infinity anyway)
+    valid = denom > 1e-6;
+    if ~any(valid), continue; end
+
+    a = xr(valid) ./ denom(valid);
+    b = yr(valid) ./ denom(valid);
+
+    % optional hard cap (like planar uv_abs_cap)
+    if isfinite(abs_cap) && abs_cap > 0
+        a = max(-abs_cap, min(abs_cap, a));
+        b = max(-abs_cap, min(abs_cap, b));
+    end
+
+    % per-camera percentile clip then update global
+    lo = robust_pct(1); hi = robust_pct(2);
+    a_lo = prctile(a, lo);  a_hi = prctile(a, hi);
+    b_lo = prctile(b, lo);  b_hi = prctile(b, hi);
+
+    a_min = min(a_min, a_lo); a_max = max(a_max, a_hi);
+    b_min = min(b_min, b_lo); b_max = max(b_max, b_hi);
+end
+
+% safety fallback
+if ~isfinite(a_min) || ~isfinite(a_max) || a_min>=a_max
+    a_min = -1; a_max = 1;
+end
+if ~isfinite(b_min) || ~isfinite(b_max) || b_min>=b_max
+    b_min = -1; b_max = 1;
+end
+end
+

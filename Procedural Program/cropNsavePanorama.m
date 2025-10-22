@@ -1,13 +1,15 @@
 function croppedPanoramas = cropNsavePanorama(input, allPanoramas, annotatedPanoramas, ...
                                               myImg, datasetName)
     
-    croppedPanoramas = cell(length(allPanoramas), 3);
+    croppedPanoramas = cell(length(allPanoramas), 5);
     for ii = 1:size(allPanoramas,1)        
         % Panorama cropper
         if input.cropPanorama == 1
             croppedPanoramas{ii,1} = panoramaCropper(input, allPanoramas{ii,1});   
             croppedPanoramas{ii,2} = panoramaCropper(input, allPanoramas{ii,2});   
             croppedPanoramas{ii,3} = panoramaCropper(input, allPanoramas{ii,3});   
+            croppedPanoramas{ii,4} = panoramaCropper(input, allPanoramas{ii,4});   
+            croppedPanoramas{ii,5} = panoramaCropper(input, allPanoramas{ii,5});   
         end
         
         % Image write
@@ -20,6 +22,12 @@ function croppedPanoramas = cropNsavePanorama(input, allPanoramas, annotatedPano
             
             imwrite(allPanoramas{ii,3}, [ 'spherical' '_' input.transformationType '_' ...
             num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
+
+            imwrite(allPanoramas{ii,4}, [ 'equirectangular' '_' input.transformationType '_' ...
+            num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
+
+            imwrite(allPanoramas{ii,5}, [ 'stereographic' '_' input.transformationType '_' ...
+            num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
             
             %-------------------------------------------------------------------------------
             if input.cropPanorama == 1
@@ -30,6 +38,12 @@ function croppedPanoramas = cropNsavePanorama(input, allPanoramas, annotatedPano
                 num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
                 
                 imwrite(croppedPanoramas{ii,3}, [ 'spherical_cropped' '_' input.transformationType '_' ...
+                num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
+
+                imwrite(croppedPanoramas{ii,4}, [ 'equirectangular_cropped' '_' input.transformationType '_' ...
+                num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
+                
+                imwrite(croppedPanoramas{ii,5}, [ 'stereographic_cropped' '_' input.transformationType '_' ...
                 num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
             end
 
@@ -42,6 +56,12 @@ function croppedPanoramas = cropNsavePanorama(input, allPanoramas, annotatedPano
                 num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
                 
                 imwrite(annotatedPanoramas{ii,3}, [ 'spherical_annotated' '_' input.transformationType '_' ...
+                num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
+
+                imwrite(annotatedPanoramas{ii,4}, [ 'equirectangular_annotated' '_' input.transformationType '_' ...
+                num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
+                
+                imwrite(annotatedPanoramas{ii,5}, [ 'stereographic_annotated' '_' input.transformationType '_' ...
                 num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
             end
         end

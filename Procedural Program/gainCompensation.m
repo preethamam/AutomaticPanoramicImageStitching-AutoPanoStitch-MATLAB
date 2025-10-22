@@ -108,38 +108,68 @@ end
 
 
 function [dwx, dwy, dwz] = pano_dirs_for_grid(xp, yp, mode, ref_idx, cameras, f_pan, u0, v0, th0, h0, ph0)
-% Compute WORLD directions [h×w×3] for a pano grid (xp,yp).
+% Compute WORLD directions [size(xp)×size(yp)×3] for a pano grid (xp,yp).
+% Conventions:
+%   - 'spherical' and 'equirectangular' are identical (theta,phi sampling).
+%   - 'stereographic' uses a plane tangent at the ref camera +Z axis,
+%     with the standard stereographic map from the *antipode* (-Z).
 
 switch lower(mode)
-case 'planar'
-    u = single(u0) + xp/single(f_pan);
-    v = single(v0) + yp/single(f_pan);
-    dx_ref = u; dy_ref = v; dz_ref = ones(size(u), 'like', u);
-    Rref = single(cameras(ref_idx).R);   % world->ref
-    Rt   = Rref.';                       % ref->world
-    dwx =  Rt(1,1)*dx_ref + Rt(1,2)*dy_ref + Rt(1,3)*dz_ref;
-    dwy =  Rt(2,1)*dx_ref + Rt(2,2)*dy_ref + Rt(2,3)*dz_ref;
-    dwz =  Rt(3,1)*dx_ref + Rt(3,2)*dy_ref + Rt(3,3)*dz_ref;
+    case 'planar'
+        % Plane coords on the reference image plane (z_ref = +1)
+        u = single(u0) + xp/single(f_pan);
+        v = single(v0) + yp/single(f_pan);
+        dx_ref = u; 
+        dy_ref = v; 
+        dz_ref = ones(size(u), 'like', u);
 
-case 'cylindrical'
-    theta = single(th0) + xp/single(f_pan);
-    h     = single(h0)  + yp/single(f_pan);
-    dwx = -sin(theta);
-    dwy = -h;
-    dwz =  cos(theta);
+        % dir_w = Rref' * dir_ref  (Rref: world->ref)
+        Rref = single(cameras(ref_idx).R);
+        Rt   = Rref.';  % ref->world
+        dwx =  Rt(1,1)*dx_ref + Rt(1,2)*dy_ref + Rt(1,3)*dz_ref;
+        dwy =  Rt(2,1)*dx_ref + Rt(2,2)*dy_ref + Rt(2,3)*dz_ref;
+        dwz =  Rt(3,1)*dx_ref + Rt(3,2)*dy_ref + Rt(3,3)*dz_ref;
 
-case 'spherical'
-    theta = single(th0) + xp/single(f_pan);
-    phi   = single(ph0) + yp/single(f_pan);
-    cphi  = cos(phi); sphi = sin(phi);
-    dwx = -cphi.*sin(theta);
-    dwy = -sphi;
-    dwz =  cphi.*cos(theta);
+    case 'cylindrical'
+        theta = single(th0) + xp/single(f_pan);
+        h     = single(h0)  + yp/single(f_pan);
+        dwx = -sin(theta);
+        dwy = -h;
+        dwz =  cos(theta);
 
-otherwise
-    error('Unknown mode "%s"', mode);
+    case {'spherical','equirectangular'}  % alias
+        theta = single(th0) + xp/single(f_pan);
+        phi   = single(ph0) + yp/single(f_pan);
+        cphi  = cos(phi); 
+        sphi  = sin(phi);
+        dwx = -cphi.*sin(theta);
+        dwy = -sphi;
+        dwz =  cphi.*cos(theta);
+
+    case 'stereographic'
+        % Plane coords in the ref camera's stereographic plane
+        % (tangent at +Z; project from -Z)
+        a = single(u0) + xp/single(f_pan);
+        b = single(v0) + yp/single(f_pan);
+        r2    = a.*a + b.*b;
+        denom = 1 + r2;                 % >= 1, but be defensive
+        % Unit direction in REF camera frame
+        dx_ref = 2*a ./ denom;
+        dy_ref = 2*b ./ denom;
+        dz_ref = (1 - r2) ./ denom;
+
+        % dir_w = Rref' * dir_ref
+        Rref = single(cameras(ref_idx).R); 
+        Rt   = Rref.';                    % ref->world
+        dwx =  Rt(1,1)*dx_ref + Rt(1,2)*dy_ref + Rt(1,3)*dz_ref;
+        dwy =  Rt(2,1)*dx_ref + Rt(2,2)*dy_ref + Rt(2,3)*dz_ref;
+        dwz =  Rt(3,1)*dx_ref + Rt(3,2)*dy_ref + Rt(3,3)*dz_ref;
+
+    otherwise
+        error('Unknown mode "%s"', mode);
 end
 end
+
 
 function [u,v,front,w_angle] = project_to_image(DWs, cam)
 % PROJECT_TO_IMAGE  Project world rays into one camera.

@@ -11,8 +11,8 @@ function [allPanoramas, annoRGBPanoramas] = displayPanorama(input, finalPanorama
     %************************************************************************%
     
     % Initialize
-    allPanoramas = cell(1,length(finalPanoramaTforms));
-    annoRGBPanoramas = cell(1,length(finalPanoramaTforms));
+    allPanoramas = cell(length(finalPanoramaTforms),5);
+    annoRGBPanoramas = cell(length(finalPanoramaTforms),5);
     
     for ii = 1:length(finalPanoramaTforms)
 
@@ -47,15 +47,27 @@ function [allPanoramas, annoRGBPanoramas] = displayPanorama(input, finalPanorama
         [panoramaSpherical, annoRGBSpherical] = renderPanorama(images, cameras, 'spherical',   refIdx, opts);
         fprintf('Spherical panorama rendering time : %f seconds\n', toc(renderSphericaltic));
 
+        renderEquirectangulartic = tic;  
+        [panoramaEquirectangular, annoRGBEquirectangular] = renderPanorama(images, cameras, 'equirectangular', refIdx, opts);
+        fprintf('Equirectangular panorama rendering time : %f seconds\n', toc(renderEquirectangulartic));
+        
+        renderStereographictic = tic;  
+        [panoramaStereographic, annoRGBStereographic] = renderPanorama(images, cameras, 'stereographic', refIdx, opts);
+        fprintf('Stereographic panorama rendering time : %f seconds\n', toc(renderStereographictic));
+
         
         % Store panoramas
         allPanoramas{ii,1}     = panoramaPlanar;
         allPanoramas{ii,2}     = panoramaCylindrical;
         allPanoramas{ii,3}     = panoramaSpherical;
+        allPanoramas{ii,4}     = panoramaEquirectangular;
+        allPanoramas{ii,5}     = panoramaStereographic;
 
         annoRGBPanoramas{ii,1} = annoRGBPlanar;
         annoRGBPanoramas{ii,2} = annoRGBCylindrical;
         annoRGBPanoramas{ii,3} = annoRGBSpherical;
+        annoRGBPanoramas{ii,4} = annoRGBEquirectangular;
+        annoRGBPanoramas{ii,5} = annoRGBStereographic;
             
         if input.displayPanoramas           
             % Full planar panorama
@@ -63,16 +75,24 @@ function [allPanoramas, annoRGBPanoramas] = displayPanorama(input, finalPanorama
             imshow(panoramaPlanar)                     
             
             % ---------------------------------------------------------------
-            % Full cylindrical panorama
-           
-            % Plot the bounding boxes
+            % Full cylindrical panorama          
             figure('Name','Cyllindrical panorama');
             imshow(panoramaCylindrical)
          
             % ---------------------------------------------------------------
             % Full Spherical panorama         
             figure('Name','Spherical panorama');
-            imshow(panoramaSpherical)                     
+            imshow(panoramaSpherical) 
+
+            % ---------------------------------------------------------------
+            % Full equirectangular panorama          
+            figure('Name','Equirectangular panorama');
+            imshow(panoramaEquirectangular)
+         
+            % ---------------------------------------------------------------
+            % Full stereographic panorama         
+            figure('Name','Stereographic panorama');
+            imshow(panoramaStereographic) 
         end    
     end
 end
