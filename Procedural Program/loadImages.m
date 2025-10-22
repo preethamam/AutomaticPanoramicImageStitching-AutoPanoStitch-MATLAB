@@ -1,4 +1,4 @@
-function [keypoints, allDescriptors, images, numImgs] = loadImages(input, imgSetVector, myImg)
+function [keypoints, allDescriptors, images, imageSizes, imageNames, numImgs] = loadImages(input, imgSetVector, myImg)
 % function imageFiles = loadImages(imgSetVector, myImg)
     
     %%***********************************************************************%
@@ -14,6 +14,8 @@ function [keypoints, allDescriptors, images, numImgs] = loadImages(input, imgSet
     imgFolder = fullfile(imgSetVector(myImg).folder, imgSetVector(myImg).name);
     imds = imageDatastore(imgFolder);
     imageFiles = readall(imds);    
+    [~,imageNames,ext] = fileparts(imds.Files);
+    imageNames = strcat(imageNames,ext);
 
     % Number of images in the folder
     numImgs = length(imageFiles);
@@ -41,21 +43,16 @@ function [keypoints, allDescriptors, images, numImgs] = loadImages(input, imgSet
             elseif imRows < 480 && imCols > 640
                 image = imresize(image,[imRows, 640]);
             end
-        end
-
-        % Camera intrinsics
-        K = [input.fx, 0, imCols/2; 0, input.fy, imRows/2; 0, 0, 1];
-
-        if strcmp(input.warpType,'spherical')
-            image = image2spherical(image, K, input.DC);
-        elseif strcmp(input.warpType,'cylindrical')
-            image = image2cylindrical(image, K, input.DC);
-        end
+        end       
 
         % Replicate the third channel
         if imChannel == 1
             image = repmat(image, 1, 1, 3);
         end
+
+        % Get size of the image
+        [imRows, imCols, imChannel] = size(image);
+        imageSizes(i,:) = [imRows, imCols, imChannel];
         
         % Stack images
         images{i} = image;

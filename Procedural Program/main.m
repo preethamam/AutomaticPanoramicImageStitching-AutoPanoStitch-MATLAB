@@ -27,7 +27,7 @@ warning('off','all');
 %--------------------------------------------------------------------------
 % Inputs file
 %--------------------------------------------------------------------------
-Inputs;
+inputs;
 
 %% Parallel workers start
 %--------------------------------------------------------------------------
@@ -60,13 +60,13 @@ foldersLen = length(datasetName);
 %--------------------------------------------------------------------------
 % Stitches panoramas
 %--------------------------------------------------------------------------
-for myImg = 65 %1:foldersLen
+for myImg = 25 %20 %1:foldersLen
     stitchStart = tic;
     fprintf('Image number: %i | Current folder: %s\n', myImg, imgFolders(myImg).name);
     
     %% Load images
     loadimagestic = tic;
-    [keypoints, allDescriptors, images, numImg] = loadImages(input, imgFolders, myImg);
+    [keypoints, allDescriptors, images, imageSizes, imageNames, numImg] = loadImages(input, imgFolders, myImg);
     fprintf('Loading images (+ features): %f seconds\n', toc(loadimagestic));
 
     %% Get feature matrices and keypoints    
@@ -81,13 +81,18 @@ for myImg = 65 %1:foldersLen
 
     %% Bundle adjustment
     bALMtic = tic;
-    [finalPanoramaTforms, concomps, imageNeighbors] = bundleAdjustmentLM(input, images, keypoints, allMatches, numMatches, initialTforms);
-    fprintf('Final alignment (Bundle adjustment): %f seconds\n', toc(bALMtic));
+    [bundlerTforms, concomps, imageNeighbors, finalrefIdxs] = bundleAdjustmentLM(input, matches, keypoints, imageSizes, initialTforms, numMatches);
+    fprintf('Final alignment (Bundle adjustment): %f seconds\n', toc(bALMtic));  
+    
+    %% Automatic panorama straightening
+    straightentic = tic;
+    finalPanoramaTforms = straightening({bundlerTforms});    
+    fprintf('Automatic panorama straightening: %f seconds\n', toc(straightentic));
 
     %% Render panoramas
-    close all;
-    rendertic = tic;
-    [allPanoramas, croppedPanoramas] = displayPanorama(finalPanoramaTforms, imageNeighbors, input, images, concomps, myImg, datasetName);
+    rendertic = tic;    
+    [allPanoramas, croppedPanoramas] = displayPanorama(input, finalPanoramaTforms, finalrefIdxs, images, ...
+                                                       myImg, datasetName);
     fprintf('Rendering panorama : %f seconds\n', toc(rendertic));
     fprintf('Total runtime (stitching) : %f seconds\n', toc(stitchStart));
     fprintf('--------------------------------\n\n', toc); %#ok<CTPCT>        

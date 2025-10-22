@@ -101,7 +101,7 @@ Creating image stitching datasets takes a lot of time and effort. During my Ph.D
 
 All these datasets are public! Some of them were from my Ph.D. studies (especially on cracks) and most of them were downloaded from the internet. I do not remember the individual names of the dataset providers. But I acknowledge their work and I am thankful to all of them! I hope you appreciate their efforts in making these datasets public to advance the research!
 
-Below are some samples from the datasets. There are 98 `panorama` or `image stitching/registration` datasets in total. You can download them in [AutoPanoStitch Stitching Datasets Compilation](https://1drv.ms/f/s!AlFYM4jwmzqrtaBpxVMpJegvN9QVZw?e=UIaYug). If I come across any interesting and challenging datasets, I will expand this compilation.
+Below are some samples from the datasets. There are 100+ `panorama` or `image stitching/registration` datasets in total. You can download them in [AutoPanoStitch Stitching Datasets Compilation](https://1drv.ms/f/s!AlFYM4jwmzqrtaBpxVMpJegvN9QVZw?e=UIaYug). Please note that this dataset compilation is more for the qualitative analysis of the image stitching problem. For quantitative analaysis, I recommend using [Quantitative Image Stitching Datasets](https://github.com/visionxiang/Image-Stitching-Dataset). If I come across any interesting and challenging datasets, I will expand this compilation.
 | Type | Images |
 | --- | --- |
 | CMU | ![dataset_samples_CMU0](assets/dataset_samples_CMU0.png) |
@@ -112,7 +112,7 @@ Below are some samples from the datasets. There are 98 `panorama` or `image stit
 | Rio | ![dataset_samples_rio](assets/dataset_samples_rio.png) |
 
 ## Citation
-Image stitching datasets for cracks are available to the public. If you use this specific dataset (related to cracks) in your research, please use the following BibTeX entry to cite:
+Image stitching datasets for cracks are available to the public. If you use the dataset related to the cracks in this compilation in your research, please use the following BibTeX entry to cite:
 ```bibtex
 @PhdThesis{preetham2021vision,
 author = {{Aghalaya Manjunatha}, Preetham},

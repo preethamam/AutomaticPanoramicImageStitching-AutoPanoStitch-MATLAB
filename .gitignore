@@ -3,7 +3,7 @@
 
 # Ignore node_modules folder
 node_modules
-MATLAB/Archive
+/Archive
 gainCompensation_v1.m
 
 # Ignore all files
@@ -21,7 +21,7 @@ gainCompensation_v1.m
 *.PDF
 *.asv
 
-ScrachPaper.m
+scrachPaper.m
 !Readme.txt
 !assets/church_01.jpeg
 !assets/church_02.jpeg
@@ -40,3 +40,6 @@ ScrachPaper.m
 
 # Ignore SASS config files
 .sass-cache
+
+# Folders
+Archive/
