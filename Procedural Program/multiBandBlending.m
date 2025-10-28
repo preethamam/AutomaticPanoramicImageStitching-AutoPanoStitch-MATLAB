@@ -1,5 +1,47 @@
 function F = multiBandBlending(Ci, Wi, levels, onGPU, sigma)
-    if nargin < 5 || isempty(sigma), sigma = 1.0; end
+    %MULTIBANDBLENDING Multi-band (pyramidal) blending of multiple images.
+    %
+    % Syntax
+    %   F = multiBandBlending(Ci, Wi, levels, onGPU)
+    %   F = multiBandBlending(Ci, Wi, levels, onGPU, sigma)
+    %
+    % Description
+    %   Blends K input images using a Laplacian pyramid weighted by per-image masks
+    %   across a specified number of pyramid levels. The inputs can be processed on
+    %   CPU or GPU. Each image is blended with its corresponding weight map; weights
+    %   are normalized to sum to 1 where any image contributes. The algorithm builds
+    %   a numerator pyramid by accumulating (Laplacian(color) .* weight) per level,
+    %   then collapses the pyramid to produce the final image F.
+    %
+    % Inputs
+    %   Ci     - 1-by-K cell array of color images. Each Ci{k} is H-by-W-by-C
+    %            with C∈{1,3}. Types are cast to single internally. GPU supported
+    %            via gpuArray when onGPU=true.
+    %   Wi     - 1-by-K cell array of weight maps. Each Wi{k} is H-by-W (single).
+    %   levels - Positive integer number of pyramid levels (clamped to valid max).
+    %   onGPU  - Logical flag; when true, inputs are moved to GPU if not already.
+    %   sigma  - Gaussian blur sigma for pyramid smoothing (default 1.0).
+    %
+    % Output
+    %   F      - Blended image, size H-by-W-by-C (single), clipped to [0,1]. If
+    %            inputs were single-channel, F is returned single-channel.
+    %
+    % Notes
+    %   - All Ci{k} and Wi{k} must share identical H and W. Single-channel inputs
+    %     are internally replicated to 3 channels for blending and collapsed back.
+    %   - Weights are pre-normalized so that sum_k Wi{k} = 1 where any weight > 0.
+    %   - The maximum usable levels is limited by floor(log2(min(H,W))).
+    %
+    % See also: imgaussfilt, imresize, gpuArray, gather
+
+    arguments
+        Ci (1, :) cell
+        Wi (1, :) cell
+        levels (1, 1) double {mustBeInteger, mustBePositive}
+        onGPU (1, 1) logical
+        sigma (1, 1) double {mustBePositive} = 1.0
+    end
+
     K = numel(Ci); assert(K == numel(Wi) && K >= 1);
 
     % Ensure types/devices
@@ -43,7 +85,7 @@ function F = multiBandBlending(Ci, Wi, levels, onGPU, sigma)
     end
 
     % 3-channel internal
-    [h, w, C0] = size(Ci{1});
+    [~, ~, C0] = size(Ci{1});
 
     if C0 == 1
         for k = 1:K, Ci{k} = repmat(Ci{k}, [1 1 3]); end

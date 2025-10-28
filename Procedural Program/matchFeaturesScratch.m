@@ -42,6 +42,16 @@ function [matches, matchMetric] = matchFeaturesScratch(F1, F2, varargin)
     %
     % Author: Dr. Preetham Manjunatha
 
+    % ARGUMENTS (validation for positional inputs only)
+    arguments
+        F1
+        F2
+    end
+
+    arguments (Repeating)
+        varargin
+    end
+
     % ------------------------- Parse inputs ---------------------------------
     % Back-compat shim: rewrite deprecated 'Approx.*' keys into flat names.
     varargin = normalizeApproxArgs(varargin); % back-compat mapper
@@ -68,7 +78,7 @@ function [matches, matchMetric] = matchFeaturesScratch(F1, F2, varargin)
     approximateMethod = lower(string(opt.ApproxFloatNNMethod));
 
     % --------------------- Normalize/unwrap input ---------------------------
-    [isBinary, A, B, nBits, unpackedBinary] = normalizeInputs(F1, F2);
+    [isBinary, A, B, nBits, ~] = normalizeInputs(F1, F2);
 
     % --- Early exit: no descriptors (common in binary ORB/BRIEF images) ---
     if isBinary && (isempty(A) || isempty(B))
@@ -106,11 +116,11 @@ function [matches, matchMetric] = matchFeaturesScratch(F1, F2, varargin)
         case "exhaustive"
 
             if isBinary
-                [idx1, idx2, d12, d22] = nearest2_hamming_exhaustive_superfast(A, B, nBits);
+                [~, idx2, d12, d22] = nearest2_hamming_exhaustive_superfast(A, B, nBits);
                 dBest = (d12 / nBits) * 100; % percent mismatch
                 dSecond = (d22 / nBits) * 100;
             else
-                [idx1, idx2, d12, d22] = nearest2_ssd_exhaustive(A, B);
+                [~, idx2, d12, d22] = nearest2_ssd_exhaustive(A, B);
                 dBest = d12; % SSD
                 dSecond = d22; % SSD
             end
@@ -119,7 +129,7 @@ function [matches, matchMetric] = matchFeaturesScratch(F1, F2, varargin)
 
             if isBinary
                 % LSH-like approximate search on binary descriptors
-                [idx1, idx2, d12, d22] = nearest2_hamming_lsh_superfast( ...
+                [~, idx2, d12, d22] = nearest2_hamming_lsh_superfast( ...
                     A, B, nBits, opt.ApproxNumTables, opt.ApproxBitsPerKey, opt.ApproxProbes);
                 dBest = (d12 / nBits) * 100; % percent mismatch
                 dSecond = (d22 / nBits) * 100;
@@ -133,17 +143,17 @@ function [matches, matchMetric] = matchFeaturesScratch(F1, F2, varargin)
                             'UseParfor', true, ...
                             'UseGPU', true); % set true if you have CUDA
 
-                        [idx1, idx2, d12_eu2, d22_eu2] = nearest2_approx_float_fast(A, B, opts_local);
+                        [~, idx2, d12_eu2, d22_eu2] = nearest2_approx_float_fast(A, B, opts_local);
                         dBest = d12_eu2; % already SSD
                         dSecond = d22_eu2;
                     case 'kdtree'
-                        [idx1, idx2, d12_eu, d22_eu] = nearest2_kdtree(A, B, opt.ApproxKDBucketSize);
+                        [~, idx2, d12_eu, d22_eu] = nearest2_kdtree(A, B, opt.ApproxKDBucketSize);
                         % Convert to SSD to match MATLAB metric
                         dBest = d12_eu .^ 2;
                         dSecond = d22_eu .^ 2;
                     case 'subset_pdist2'
                         % High-D: directly use subset-pdist2 (very robust)
-                        [idx1, idx2, d12_eu, d22_eu] = nearest2_subset_pdist2(A, B, 12000);
+                        [~, idx2, d12_eu, d22_eu] = nearest2_subset_pdist2(A, B, 12000);
                         dBest = d12_eu .^ 2;
                         dSecond = d22_eu .^ 2;
                     otherwise
@@ -205,12 +215,30 @@ function [matches, matchMetric] = matchFeaturesScratch(F1, F2, varargin)
 end
 
 function Xn = normalizeRowsL2(X)
+    % NORMALIZEROWSL2 L2-normalize each row of a matrix.
+    %   Xn = normalizeRowsL2(X)
+    %   Scales each row to unit L2 norm with a small epsilon for stability.
+
+    arguments
+        X (:, :) {mustBeNumeric}
+    end
+
     n = sqrt(sum(X .^ 2, 2)) + eps('single');
     Xn = X ./ n;
 end
 
 % --------------- Helper: figure out if inputs are binary ----------------
 function [isBinary, A, B, nBits, unpacked] = normalizeInputs(F1, F2)
+    % NORMALIZEINPUTS Detect descriptor type and coerce to working form.
+    %   [isBinary, A, B, nBits, unpacked] = normalizeInputs(F1, F2)
+    %   Accepts binaryFeatures, logical/uint8 0-1 matrices, or float matrices.
+    %   Returns packed uint8 bytes for binary and single/double for float.
+
+    arguments
+        F1
+        F2
+    end
+
     unpacked = false;
 
     if isa(F1, 'binaryFeatures') && isa(F2, 'binaryFeatures')
@@ -250,7 +278,16 @@ end
 
 % --------------------- Exhaustive (binary, Hamming) ---------------------
 function [idx1, idx2, d1, d2] = nearest2_hamming_exhaustive_superfast(Abytes, Bbytes, nBits)
-    % Abytes, Bbytes: uint8 [N x nbytes]
+    % NEAREST2_HAMMING_EXHAUSTIVE_SUPERFAST 2-NN under Hamming for binary features.
+    %   [idx1, idx2, d1, d2] = nearest2_hamming_exhaustive_superfast(Abytes,Bbytes,nBits)
+    %   Abytes,Bbytes are uint8 packed bit rows; distances are bit counts.
+
+    arguments
+        Abytes (:, :) uint8
+        Bbytes (:, :) uint8
+        nBits (1, 1) double {mustBeInteger, mustBePositive}
+    end
+
     [idx2, d1, d2] = nearest2_hamming_exhaustive_mex(Abytes, Bbytes);
     idx1 = (1:size(Abytes, 1)).';
     % guard second
@@ -259,9 +296,18 @@ end
 
 % --------------------- Exhaustive (float, SSD) --------------------------
 function [idx1, idx2, d1, d2] = nearest2_ssd_exhaustive(A, B)
+    % NEAREST2_SSD_EXHAUSTIVE 2-NN under SSD for float descriptors.
+    %   [idx1, idx2, d1, d2] = nearest2_ssd_exhaustive(A,B)
+    %   Computes SSD in manageable blocks for memory efficiency.
+
+    arguments
+        A (:, :) {mustBeNumeric}
+        B (:, :) {mustBeNumeric}
+    end
+
     % Compute distances in chunks to control memory
-    N1 = size(A, 1); N2 = size(B, 1);
-    D = size(A, 2);
+    N1 = size(A, 1);
+    % D = size(A, 2); % not used
     block = max(1, floor(1e7 / max(N2, 1))); % heuristic
     idx2 = zeros(N1, 1, 'uint32'); d1 = inf(N1, 1); d2 = inf(N1, 1);
 
@@ -288,8 +334,16 @@ function [idx1, idx2, d1, d2] = nearest2_ssd_exhaustive(A, B)
 end
 
 function [idx1, idx2, d1, d2] = nearest2_subset_pdist2(A, B, subset)
-    % Approximate 2-NN by sampling a subset of B then using pdist2 (Euclidean).
-    % Returns Euclidean distances; caller squares to SSD.
+    % NEAREST2_SUBSET_PDIST2 Approximate 2-NN via subset + pdist2.
+    %   [idx1, idx2, d1, d2] = nearest2_subset_pdist2(A,B,subset)
+    %   Returns Euclidean distances; caller may square to obtain SSD.
+
+    arguments
+        A (:, :) {mustBeNumeric}
+        B (:, :) {mustBeNumeric}
+        subset (1, 1) double {mustBeInteger, mustBePositive}
+    end
+
     subset = min(subset, size(B, 1));
     candB = randperm(size(B, 1), subset);
     B2 = B(candB, :);
@@ -308,8 +362,15 @@ function [idx1, idx2, d1, d2] = nearest2_subset_pdist2(A, B, subset)
 end
 
 function [idx1, idx2, d1, d2] = nearest2_kdtree(A, B, bucketSize)
-    % KD-tree 2-NN using createns/knnsearch with BucketSize (R2025b).
-    % Returns Euclidean d1,d2; caller squares for SSD.
+    % NEAREST2_KDTREE KD-tree based 2-NN for float descriptors.
+    %   [idx1, idx2, d1, d2] = nearest2_kdtree(A,B,bucketSize)
+    %   Returns Euclidean distances; caller may square for SSD.
+
+    arguments
+        A (:, :) {mustBeNumeric}
+        B (:, :) {mustBeNumeric}
+        bucketSize (1, 1) double {mustBeInteger, mustBePositive}
+    end
 
     idx1 = (1:size(A, 1)).';
 
@@ -330,15 +391,22 @@ function [idx1, idx2, d1, d2] = nearest2_kdtree(A, B, bucketSize)
 end
 
 function [idx1, idx2, dBest, dSecond] = nearest2_approx_float_fast(A, B, opts)
-    % Fast approximate 2-NN for float descriptors (e.g., 128-D SIFT)
-    % Strategy: PCA to dproj (optional), L2 normalize, block GEMM, take top-2
+    % NEAREST2_APPROX_FLOAT_FAST Fast approximate 2-NN for float descriptors.
+    %   [idx1, idx2, dBest, dSecond] = nearest2_approx_float_fast(A,B,opts)
+    %   Strategy: optional PCA, L2-normalize, block GEMM, then take top-2.
     %
-    % opts fields (with sensible defaults):
-    %   .ApproxNumComponents  : 48     % PCA target dims (32/48/64 typical)
-    %   .UsePCA               : true
-    %   .BlockRows            : 4000   % rows of A per block (tune by RAM)
-    %   .UseParfor            : true
-    %   .UseGPU               : false  % optional, if gpu available
+    %   opts fields (defaults shown):
+    %     .ApproxNumComponents  (48)
+    %     .UsePCA               (true)
+    %     .BlockRows            (4000)
+    %     .UseParfor            (true)
+    %     .UseGPU               (false)
+
+    arguments
+        A (:, :) {mustBeNumeric}
+        B (:, :) {mustBeNumeric}
+        opts (1, 1) struct
+    end
 
     if ~isfield(opts, 'ApproxNumComponents'), opts.ApproxNumComponents = 48; end
     if ~isfield(opts, 'UsePCA'), opts.UsePCA = true; end
@@ -404,6 +472,14 @@ end
 % convert cosine similarity to SSD on unit vectors:
 %   ||a-b||^2 = 2 - 2*(a·b)
 function [idBlock, d1Block, d2Block] = do_block(Ablk, Bfull, useGPUflag)
+    % DO_BLOCK Helper to compute 2-NN for a block, CPU or GPU path.
+    %   [idBlock, d1Block, d2Block] = do_block(Ablk,Bfull,useGPUflag)
+
+    arguments
+        Ablk (:, :) {mustBeNumeric}
+        Bfull (:, :) {mustBeNumeric}
+        useGPUflag (1, 1) logical
+    end
 
     if useGPUflag
         GA = gpuArray(Ablk);
@@ -429,7 +505,7 @@ function [idBlock, d1Block, d2Block] = do_block(Ablk, Bfull, useGPUflag)
 end
 
 function tf = canUseGPU()
-
+    % CANUSEGPU True if a compatible GPU device is available.
     try
         tf = parallel.gpu.GPUDevice.isAvailable;
     catch
@@ -439,7 +515,21 @@ function tf = canUseGPU()
 end
 
 % --------------- Approx (binary): LSH-like hashing ----------------------
-function [idx1, idx2, d1, d2] = nearest2_hamming_lsh_superfast(Abytes, Bbytes, nBits, ~, ~, ~)
+function [idx1, idx2, d1, d2] = nearest2_hamming_lsh_superfast(Abytes, Bbytes, nBits, numTables, bitsPerKey, nProbes)
+    % NEAREST2_HAMMING_LSH_SUPERFAST Approximate 2-NN for binary via hashing.
+    %   Currently delegates to OMP exhaustive MEX for speed.
+
+    arguments
+        Abytes (:, :) uint8
+        Bbytes (:, :) uint8
+        nBits (1, 1) double {mustBeInteger, mustBePositive}
+        numTables (1, 1) double {mustBeInteger, mustBePositive}
+        bitsPerKey (1, 1) double {mustBeInteger, mustBePositive}
+        nProbes (1, 1) double {mustBeInteger, mustBePositive}
+    end
+
+    % Touch unused NV inputs to satisfy code analyzer
+    tmp_unused = numTables + bitsPerKey + nProbes; %#ok<NASGU>
     [idx2, d1, d2] = nearest2_hamming_exhaustive_omp_mex(Abytes, Bbytes);
     idx1 = (1:size(Abytes, 1)).';
     d2(~isfinite(d2) | d2 == 0) = single(ceil(nBits));
@@ -447,7 +537,15 @@ end
 
 % --------------------- Utilities ----------------------------------------
 function [packed, nBits] = packBits(unpacked01)
-    % Input logical/uint8 0/1, [N x Dbits] -> packed uint8 [N x ceil(Dbits/8)]
+    % PACKBITS Pack 0/1 logical/uint8 bits into uint8 bytes per row.
+    %   [packed, nBits] = packBits(unpacked01)
+    %   Input: [N x Dbits] logical/uint8 with values {0,1}
+    %   Output: packed [N x ceil(Dbits/8)] uint8 and the original bit count.
+
+    arguments
+        unpacked01 (:, :) {mustBeNumericOrLogical}
+    end
+
     validateattributes(unpacked01, {'logical', 'uint8'}, {'2d', 'nonempty'});
     N = size(unpacked01, 1);
     D = size(unpacked01, 2);
@@ -465,6 +563,13 @@ end
 
 % ---- Back-compat normalizer (put near other helpers) ----
 function nv = normalizeApproxArgs(nv)
+    % NORMALIZEAPPROXARGS Map legacy Approx.* NV-pairs to current option names.
+    %   nv = normalizeApproxArgs(nv)
+
+    arguments
+        nv (1, :) cell
+    end
+
     if isempty(nv), return; end
 
     for k = 1:2:numel(nv)

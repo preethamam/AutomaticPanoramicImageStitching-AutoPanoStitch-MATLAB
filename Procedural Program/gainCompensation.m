@@ -1,23 +1,83 @@
 function gains = gainCompensation(images, cameras, mode, ref_idx, opts, ...
         H, W, u0, v0, th0, h0, ph0, srcW)
-    % FAST Brown–Lowe (2007) gain compensation Eq. (29) with tiling + GPU.
-    % Returns per-image RGB gains [N x 3].
+    % GAINCOMPENSATION Estimate per-image RGB gains using Brown–Lowe (2007) Eq. (29).
+    %   gains = gainCompensation(images, cameras, mode, ref_idx, opts, ...
+    %           H, W, u0, v0, th0, h0, ph0, srcW) computes brightness gain factors
+    %   for each image so that overlapping regions have consistent exposure. The
+    %   method tiles a subsampled panorama grid, accumulates per-overlap statistics,
+    %   and solves a small linear system per channel for the gains. Optional GPU
+    %   support keeps intermediate arrays on the device.
     %
-    % New/important opts (in addition to your originals):
-    %   .use_gpu            : true/false (default: auto if gpuDeviceCount>0)
-    %   .tile               : [tileH tileW] over the SUBSAMPLED grid (default: [256 256])
-    %   .parfor_tiles       : true/false (default: false). Parallelize over tiles on CPU.
-    %   .anchor_ref         : true/false (default: false). Hard anchor g_ref = 1 with big diag.
-    %   .lambda_diag        : small Tikhonov (default 1e-8)
+    %   Inputs
+    %   - images    : 1xN or Nx1 cell of RGB images (numeric arrays).
+    %   - cameras   : 1xN or Nx1 struct array with fields R (3x3), K (3x3).
+    %   - mode      : projection mode: 'planar' | 'cylindrical' | 'spherical' |
+    %                 'equirectangular' | 'stereographic'.
+    %   - ref_idx   : reference camera index (positive integer).
+    %   - opts      : struct of options. Fields used include:
+    %                 overlap_stride, min_overlap_samples, sigma_N, sigma_g,
+    %                 lambda_diag, parfor_tiles, anchor_ref, tile, use_gpu, f_pan.
+    %   - H, W      : panorama height and width (subsampled grid derives from stride).
+    %   - u0, v0    : planar/stereographic center offsets.
+    %   - th0, h0   : cylindrical base angles/height offsets.
+    %   - ph0       : spherical/equirectangular latitude offset.
+    %   - srcW      : 1xN or Nx1 cell of single-channel weight/coverage maps.
     %
-    % Notes:
-    %   * We accumulate only per-edge statistics needed for Eq.(29):
-    %       N_ij            (count of overlap samples)
-    %       sumCi_ij(ch)    = sum over overlap of Ci(:,ch)
-    %       sumCj_ij(ch)    = sum over overlap of Cj(:,ch)
-    %     Means are recovered as Ibar_ij = sumCi_ij / N_ij, etc.
-    %   * Large memory wins by tiling the SUBSAMPLED pano grid: we never build full-size DWs.
-    %   * GPU path keeps arrays on GPU and does reductions there; final A/b are built on CPU.
+    %   Output
+    %   - gains     : N-by-3 single matrix of per-image RGB gains, clamped to [0.25, 4].
+    %
+    %   Notes
+    %   - We accumulate only per-edge statistics required by Eq.(29): counts N_ij and
+    %     channel sums over overlaps; means are recovered as sums / N_ij.
+    %   - Tiling is done over a SUBSAMPLED grid to reduce memory; we never build full DWs.
+    %   - GPU path keeps arrays on device and reduces there; final A/b assembly happens on CPU.
+    %
+    %   See also svd, gpuArray, gather, interp2
+
+    arguments
+        images cell
+        cameras struct
+        mode {mustBeTextScalar}
+        ref_idx (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+        opts (1, 1) struct
+        H (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+        W (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+        u0
+        v0
+        th0
+        h0
+        ph0
+        srcW cell
+    end
+
+    % Basic consistency and camera validation
+    N = numel(images);
+
+    if ~(isvector(images) && isvector(srcW) && numel(srcW) == N)
+        error('gainCompensation:SrcWSize', 'srcW must be a vector cell array with the same length as images.');
+    end
+
+    if ~(isstruct(cameras) && numel(cameras) == N)
+        error('gainCompensation:CamerasSize', 'cameras must be a struct array with one entry per image.');
+    end
+
+    for i = 1:N
+
+        if ~isfield(cameras(i), 'R') || ~isfield(cameras(i), 'K')
+            error('gainCompensation:CamFields', 'cameras(%d) must contain fields R and K.', i);
+        end
+
+        Ri = cameras(i).R; Ki = cameras(i).K;
+
+        if ~(isnumeric(Ri) && isequal(size(Ri), [3, 3]) && all(isfinite(Ri(:))))
+            error('gainCompensation:RShape', 'cameras(%d).R must be a 3x3 finite numeric matrix.', i);
+        end
+
+        if ~(isnumeric(Ki) && isequal(size(Ki), [3, 3]) && all(isfinite(Ki(:))))
+            error('gainCompensation:KShape', 'cameras(%d).K must be a 3x3 finite numeric matrix.', i);
+        end
+
+    end
 
     N = numel(images);
     gains = ones(N, 3, 'single');
@@ -179,6 +239,37 @@ end % gainCompensation
 function [Nij_loc, sumCi_loc, sumCj_loc] = do_one_tile(ty, tx, opts, mode, ref_idx, cameras, ...
         u0, v0, th0, h0, ph0, weights, imgs, tileH, tileW, ...
         Hs, Ws, xp_all, yp_all, N)
+    % DO_ONE_TILE Accumulate overlap statistics for a single subsampled tile.
+    %   [Nij_loc, sumCi_loc, sumCj_loc] = do_one_tile(ty, tx, opts, mode, ref_idx, cameras,
+    %       u0, v0, th0, h0, ph0, weights, imgs, tileH, tileW, Hs, Ws, xp_all, yp_all, N)
+    %   computes, for the tile starting at (ty, tx) on the subsampled grid, the
+    %   per-pair overlap counts and per-channel color sums needed for gain solving.
+    %
+    %   Outputs are double and sized to N-by-N (and N-by-N-by-3 for color sums).
+
+    arguments
+        ty (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+        tx (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+        opts (1, 1) struct
+        mode {mustBeTextScalar}
+        ref_idx (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+        cameras struct
+        u0
+        v0
+        th0
+        h0
+        ph0
+        weights cell
+        imgs cell
+        tileH (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+        tileW (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+        Hs (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+        Ws (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+        xp_all (:, 1) {mustBeNumeric, mustBeFinite}
+        yp_all (:, 1) {mustBeNumeric, mustBeFinite}
+        N (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+    end
+
     % ranges in subsampled-index space
     y2 = min(ty + tileH - 1, Hs);
     x2 = min(tx + tileW - 1, Ws);
@@ -192,7 +283,6 @@ function [Nij_loc, sumCi_loc, sumCj_loc] = do_one_tile(ty, tx, opts, mode, ref_i
     DWs = cat(3, DWx, DWy, DWz);
 
     % Pre-alloc per-image projections/masks for this tile (device arrays)
-    HW = numel(xp_s);
     uL = cell(N, 1); vL = cell(N, 1); cov = cell(N, 1);
 
     % Project into each image and compute coverage from srcW
@@ -259,6 +349,28 @@ end
 function [dwx, dwy, dwz] = pano_dirs_for_grid_tile(xp_s, yp_s, mode, ...
         ref_idx, cameras, f_pan, u0, v0, ...
         th0, h0, ph0, useGPU)
+    % PANO_DIRS_FOR_GRID_TILE Compute world direction vectors for a pano grid tile.
+    %   [dwx, dwy, dwz] = pano_dirs_for_grid_tile(xp_s, yp_s, mode, ref_idx, cameras,
+    %       f_pan, u0, v0, th0, h0, ph0, useGPU) returns per-pixel world direction
+    %   vectors for the given projection mode, relative to a reference camera.
+    %
+    %   Returns three arrays of the same size as xp_s/yp_s containing the x/y/z
+    %   components of the direction vectors.
+
+    arguments
+        xp_s (:, :) {mustBeNumeric, mustBeFinite}
+        yp_s (:, :) {mustBeNumeric, mustBeFinite}
+        mode {mustBeTextScalar}
+        ref_idx (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+        cameras struct
+        f_pan (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+        u0 
+        v0 
+        th0
+        h0 
+        ph0
+        useGPU (1, 1) logical
+    end
 
     if useGPU
         xp_s = gpuArray(xp_s); yp_s = gpuArray(yp_s);
@@ -302,6 +414,26 @@ function [dwx, dwy, dwz] = pano_dirs_for_grid_tile(xp_s, yp_s, mode, ...
 end
 
 function [u, v, front] = project_to_image(DWs, cam, useGPU)
+    % PROJECT_TO_IMAGE Project world direction vectors into a camera image.
+    %   [u, v, front] = project_to_image(DWs, cam, useGPU) projects the world
+    %   directions DWs (HxWx3 or [M x N x 3]) into pixel coordinates using the
+    %   camera intrinsics K and orientation R. Returns pixel arrays u, v and a
+    %   logical mask 'front' for directions with positive z in camera space.
+
+    arguments
+        DWs (:, :, :) {mustBeNumeric}
+        cam (1, 1) struct
+        useGPU (1, 1) logical
+    end
+
+    if size(DWs, 3) ~= 3
+        error('project_to_image:DWsShape', 'DWs must be an array with size(DWs,3) == 3.');
+    end
+
+    if ~isfield(cam, 'R') || ~isfield(cam, 'K')
+        error('project_to_image:CamFields', 'cam struct must contain fields R and K.');
+    end
+
     DW = reshape(DWs, [], 3); % [M x 3]
 
     % Compact version returning only what we need (u,v,front)
@@ -327,6 +459,23 @@ function [u, v, front] = project_to_image(DWs, cam, useGPU)
 end
 
 function S = sample_linear(I, u, v, tileHW, useGPU)
+    % SAMPLE_LINEAR Bilinear sampler for single-channel images with NaN extrapolation.
+    %   S = sample_linear(I, u, v, tileHW, useGPU) samples the single-channel
+    %   image/map I at floating-point pixel coordinates (u,v) using bilinear
+    %   interpolation. Out-of-range values are set to NaN. The result is a
+    %   column vector matching the number of query points.
+
+    arguments
+        I (:, :) {mustBeNumeric}
+        u (:, 1) {mustBeNumeric}
+        v (:, 1) {mustBeNumeric}
+        tileHW (1, 2) {mustBeNumeric}
+        useGPU (1, 1) logical
+    end
+
+    % Touch tileHW to avoid unused-arg warning when validating signature
+    tileHW = tileHW; %#ok<NASGU>
+
     % Single-channel sampler (srcW)
     [hh, ww, ~] = size(I); %#ok<ASGLU>
     X = single(1:ww); Y = single(1:hh);
@@ -342,6 +491,18 @@ function S = sample_linear(I, u, v, tileHW, useGPU)
 end
 
 function S = sample_linear_rgb(I, u, v, useGPU)
+    % SAMPLE_LINEAR_RGB Bilinear sampler for RGB images with NaN extrapolation.
+    %   S = sample_linear_rgb(I, u, v, useGPU) samples the RGB image I at
+    %   floating-point pixel coordinates (u,v) and returns a K-by-3 array where
+    %   each row contains the sampled RGB values. Out-of-range values are NaN.
+
+    arguments
+        I (:, :, :) {mustBeNumeric}
+        u (:, 1) {mustBeNumeric}
+        v (:, 1) {mustBeNumeric}
+        useGPU (1, 1) logical
+    end
+
     % RGB sampler returning [K x 3]
     [hh, ww, ~] = size(I); %#ok<ASGLU>
     X = single(1:ww); Y = single(1:hh);

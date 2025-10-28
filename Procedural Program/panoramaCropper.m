@@ -1,5 +1,69 @@
 function croppedImage = panoramaCropper(input, stitchedImage)
-    % Initilize the variables
+    % PANORAMACROPPER Crop a stitched panorama to its content bounds.
+    %   croppedImage = panoramaCropper(input, stitchedImage) computes a tight
+    %   crop rectangle around the valid content of the stitched RGB image
+    %   stitchedImage by thresholding with respect to the canvas color and
+    %   returns the cropped image.
+    %
+    %   Inputs
+    %   - input: struct with fields:
+    %       canvas_color        - "black" or "white" background for empty canvas.
+    %       blackRange          - Scalar in [0,255] threshold when canvas_color = "black".
+    %       whiteRange          - Scalar in [0,255] threshold when canvas_color = "white".
+    %       showCropBoundingBox - logical flag to visualize crop rectangle.
+    %       displayPanoramas    - logical flag that controls interactive display.
+    %   - stitchedImage: M-by-N-by-3 numeric RGB image to crop.
+    %
+    %   Output
+    %   - croppedImage: Cropped RGB image. If a valid crop cannot be computed
+    %     (e.g., due to holes in the background mask), the input image is
+    %     returned unchanged and a warning is issued.
+    %
+    %   Notes
+    %   - If showCropBoundingBox and displayPanoramas are both true, the crop
+    %     rectangle is drawn and exported to 'pano_bbox.jpg'.
+    %   - Assumes an 8-bit intensity range; thresholds are interpreted in [0,255].
+    %
+    %   See also rgb2gray, imbinarize, imfill, imcomplement, rectangle, exportgraphics
+
+    arguments
+        input (1, 1) struct
+        stitchedImage (:, :, 3) {mustBeNumeric, mustBeNonempty}
+    end
+
+    % Validate required fields and values in input struct
+    reqFields = ["canvas_color", "blackRange", "whiteRange", "showCropBoundingBox", "displayPanoramas"];
+    missing = reqFields(~isfield(input, reqFields));
+
+    if ~isempty(missing)
+        error('panoramaCropper:MissingField', ...
+            'Missing required input fields: %s', strjoin(missing, ', '));
+    end
+
+    canvasColor = lower(string(input.canvas_color));
+
+    if ~(canvasColor == "black" || canvasColor == "white")
+        error('panoramaCropper:InvalidCanvasColor', ...
+        'input.canvas_color must be "black" or "white".');
+    end
+
+    if ~(isscalar(input.blackRange) && isnumeric(input.blackRange) && isfinite(input.blackRange) && input.blackRange >= 0 && input.blackRange <= 255)
+        error('panoramaCropper:InvalidBlackRange', 'input.blackRange must be a numeric scalar in [0,255].');
+    end
+
+    if ~(isscalar(input.whiteRange) && isnumeric(input.whiteRange) && isfinite(input.whiteRange) && input.whiteRange >= 0 && input.whiteRange <= 255)
+        error('panoramaCropper:InvalidWhiteRange', 'input.whiteRange must be a numeric scalar in [0,255].');
+    end
+
+    if ~(islogical(input.showCropBoundingBox) && isscalar(input.showCropBoundingBox))
+        error('panoramaCropper:InvalidFlag', 'input.showCropBoundingBox must be a logical scalar.');
+    end
+
+    if ~(islogical(input.displayPanoramas) && isscalar(input.displayPanoramas))
+        error('panoramaCropper:InvalidFlag', 'input.displayPanoramas must be a logical scalar.');
+    end
+
+    % Initialize the variables
     w = size(stitchedImage, 2);
     h = size(stitchedImage, 1);
 
@@ -8,10 +72,10 @@ function croppedImage = panoramaCropper(input, stitchedImage)
     % (foreground) while all others remain 0 (background)
     gray = rgb2gray(stitchedImage);
 
-    if strcmp(input.canvas_color, 'black')
-        BW = imbinarize(gray, input.blackRange / 255);
+    if canvasColor == "black"
+        BW = imbinarize(gray, double(input.blackRange) / 255);
     else
-        BW = imbinarize(gray, input.whiteRange / 255);
+        BW = imbinarize(gray, double(input.whiteRange) / 255);
         BW = imcomplement(BW);
     end
 
@@ -96,7 +160,7 @@ function croppedImage = panoramaCropper(input, stitchedImage)
     try
         croppedImage = stitchedImage(offsety:offsety + cropH, offsetx:offsetx + cropW, :);
     catch
-        warning('Cannot crop the image. Image has backgorund holes.');
+        warning('Cannot crop the image. Image has background holes.');
         croppedImage = stitchedImage;
     end
 

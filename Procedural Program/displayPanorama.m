@@ -1,10 +1,91 @@
 function panoStore = displayPanorama(input, finalPanoramaTforms, ...
-                                finalrefIdxs, imagesAll, panoIndices)
+        finalrefIdxs, imagesAll, panoIndices)
+    %DISPLAYPANORAMA Render panoramas for selected projections and optionally display them.
+    %
+    % Syntax
+    %   panoStore = displayPanorama(input, finalPanoramaTforms, finalrefIdxs, imagesAll, panoIndices)
+    %
+    % Description
+    %   For each panorama component, this function renders panoramas in one or more
+    %   projection models specified by input.panorama2DisplaynSave using renderPanorama.
+    %   The rendered RGB panorama and an optional annotated RGB image are stored in
+    %   the returned panoStore struct. When input.displayPanoramas is true, the
+    %   panoramas are displayed in figures. The function also constructs an options
+    %   struct for rendering and blending from fields in input.
+    %
+    % Inputs
+    %   input               - Struct of parameters and display options. Expected fields include:
+    %                         • panorama2DisplaynSave: string/cell array of projections to render,
+    %                           e.g., ["planar","cylindrical",...].
+    %                         • canvas_color, gainCompensation, sigmaN, sigmag, bands,
+    %                           blending, MBBsigma, showPanoramaImgsNums, showCropBoundingBox,
+    %                           displayPanoramas (logical).
+    %   finalPanoramaTforms - C-by-1 cell array; for each component i, finalPanoramaTforms{i}
+    %                         is an array of camera structs with fields including K (intrinsics)
+    %                         and the required pose/transform data for rendering.
+    %   finalrefIdxs        - C-by-1 numeric array with the reference image index for each component.
+    %   imagesAll           - N-by-1 cell array of source images.
+    %   panoIndices         - C-by-1 cell array; panoIndices{i} lists the absolute image indices
+    %                         belonging to component i.
+    %
+    % Output
+    %   panoStore           - 1-by-C struct array. For each component i, fields may include
+    %                         'planar', 'cylindrical', 'spherical', 'equirectangular',
+    %                         'stereographic' depending on requested projections. Each field is
+    %                         a 1x2 cell array: {1} RGB panorama, {2} annotated RGB (may be empty).
+    %
+    % Side effects
+    %   - Closes all open figures at the start of each component iteration (close all).
+    %   - When input.displayPanoramas is true, opens figure windows and displays panoramas.
+    %
+    % Notes
+    %   - The focal length for planar projection is taken as f_pan = cameras(refIdx).K(1,1).
+    %   - The function assumes renderPanorama supports the given projections and options.
+    %   - Projection-specific figure titles are used when displaying results.
+    %
+    % See also: renderPanorama, cropNsavePanorama, imshow, figure
+
+    arguments
+        input (1, 1) struct
+        finalPanoramaTforms cell
+        finalrefIdxs (:, 1) double {mustBeInteger, mustBeInteger}
+        imagesAll cell
+        panoIndices cell
+    end
+
+    % Basic runtime validations
+    C = numel(finalPanoramaTforms);
+
+    if numel(finalrefIdxs) ~= C
+        error('displayPanorama:InvalidRefIdxsLength', 'finalrefIdxs must have one entry per component (%d).', C);
+    end
+
+    if numel(panoIndices) ~= C
+        error('displayPanorama:InvalidPanoIndicesLength', 'panoIndices must have one cell per component (%d).', C);
+    end
+
+    Nimgs = numel(imagesAll);
+
+    for iiChk = 1:C
+        idxs = panoIndices{iiChk};
+
+        if ~isnumeric(idxs) || ~isvector(idxs)
+            if isempty(idxs), continue, end
+            error('displayPanorama:InvalidPanoIndexType', 'panoIndices{%d} must be a numeric vector of image indices.', iiChk);
+        end
+
+        if ~isempty(idxs) && (min(idxs) < 1 || max(idxs) > Nimgs)
+            error('displayPanorama:ImageIndexOutOfBounds', 'panoIndices{%d} has indices outside 1..%d.', iiChk, Nimgs);
+        end
+
+    end
 
     % Initialize
     panoStore = struct();
 
     for ii = 1:length(finalPanoramaTforms)
+        
+        if isempty(finalPanoramaTforms{ii}), continue, end
 
         % Close all figures
         close all;
@@ -80,9 +161,9 @@ function panoStore = displayPanorama(input, finalPanoramaTforms, ...
             end
 
         end
-        
+
         % Pause to visuzalize the panorama
-        pause(0)
+        pause(5)
 
     end
 

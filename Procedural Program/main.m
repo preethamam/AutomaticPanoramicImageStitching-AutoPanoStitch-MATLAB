@@ -44,7 +44,6 @@ if (isempty(gcp('nocreate')))
 end
 
 Start = tic;
-warning('off', 'all')
 
 %% Get image filenames and store image names
 %--------------------------------------------------------------------------
@@ -62,7 +61,7 @@ foldersLen = length(datasetName);
 %--------------------------------------------------------------------------
 % Stitches panoramas
 %--------------------------------------------------------------------------
-for myImg = 17 %1:foldersLen
+for myImg = 20:foldersLen
     stitchStart = tic;
     fprintf('Image number: %i | Current folder: %s\n', myImg, imgFolders(myImg).name);
 

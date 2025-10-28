@@ -34,7 +34,7 @@ function [cameras, seed] = bundleAdjustmentLM(input, matches, keypoints, ...
         input (1, 1) struct
         matches (:, :) cell
         keypoints cell
-        imageSizes (:, 2) {mustBeNumeric, mustBeFinite}
+        imageSizes (:, 3) {mustBeNumeric, mustBeFinite}
         initialTforms
     end
 
@@ -168,7 +168,7 @@ function stats = check_w2c_sanity(pairs, cameras, imageSizes, num_pairs)
     arguments
         pairs (1, :) struct
         cameras (1, :) struct
-        imageSizes (:, 2) {mustBeNumeric, mustBeFinite}
+        imageSizes (:, 3) {mustBeNumeric, mustBeFinite}
         num_pairs (1, 1) double {mustBeInteger, mustBePositive, mustBeFinite} = min(20, numel(pairs))
     end
 
@@ -225,7 +225,7 @@ function compare_conventions(pairs, cameras, imageSizes, num_pairs)
     arguments
         pairs (1, :) struct
         cameras (1, :) struct
-        imageSizes (:, 2) {mustBeNumeric, mustBeFinite}
+        imageSizes (:, 3) {mustBeNumeric, mustBeFinite}
         num_pairs (1, 1) double {mustBeInteger, mustBePositive, mustBeFinite} = min(20, numel(pairs))
     end
 
@@ -371,7 +371,7 @@ function [thetaA, cameras] = run_lm(active, theta0, cameras, pairs, imageSizes, 
         theta0 (:, 3) double {mustBeFinite}
         cameras (1, :) struct
         pairs (1, :) struct
-        imageSizes (:, 2) double {mustBeFinite}
+        imageSizes (:, 3) double {mustBeFinite}
         seed (1, 1) double {mustBeInteger, mustBePositive, mustBeFinite}
         input (1, 1) struct
         opt (1, 1) struct
@@ -591,7 +591,7 @@ function jacobian_check(theta, cameras, pairs, active, imageSizes, sigma, seed)
         cameras (1, :) struct
         pairs (1, :) struct
         active (1, :) double {mustBeInteger, mustBePositive, mustBeFinite}
-        imageSizes (:, 2) double {mustBeFinite}
+        imageSizes (:, 3) double {mustBeFinite}
         sigma (1, 1) double {mustBePositive, mustBeFinite}
         seed (1, 1) double {mustBeInteger, mustBePositive, mustBeFinite}
     end
@@ -634,7 +634,7 @@ function [m, mx] = avg_abs_residual(theta, cameras, pairs, active, imageSizes)
         cameras (1, :) struct
         pairs (1, :) struct
         active (1, :) double {mustBeInteger, mustBePositive, mustBeFinite}
-        imageSizes (:, 2) double {mustBeFinite}
+        imageSizes (:, 3) double {mustBeFinite}
     end
 
     activeMask = false(1, numel(cameras)); activeMask(active) = true;
@@ -691,7 +691,7 @@ function [H, g, E, nres] = accumulate_normal_equations(theta, cameras, pairs, ac
         cameras (1, :) struct
         pairs (1, :) struct
         active (1, :) double {mustBeInteger, mustBePositive, mustBeFinite}
-        imageSizes (:, 2) double {mustBeFinite}
+        imageSizes (:, 3) double {mustBeFinite}
         sigmaHuber (1, 1) double {mustBePositive, mustBeFinite}
     end
 
@@ -1005,7 +1005,7 @@ function E = total_energy(theta, cameras, pairs, active, imageSizes, sigma)
         cameras (1, :) struct
         pairs (1, :) struct
         active (1, :) double {mustBeInteger, mustBePositive, mustBeFinite}
-        imageSizes (:, 2) double {mustBeFinite}
+        imageSizes (:, 3) double {mustBeFinite}
         sigma (1, 1) double {mustBePositive, mustBeFinite}
     end
 
@@ -1061,7 +1061,7 @@ function [thetaNew, camerasNew] = apply_update(theta, cameras, d, active, imageS
         cameras (1, :) struct
         d (:, 1) double {mustBeFinite}
         active (1, :) double {mustBeInteger, mustBePositive, mustBeFinite}
-        imageSizes (:, 2) double {mustBeFinite}
+        imageSizes (:, 3) double {mustBeFinite}
         seed (1, 1) double {mustBeInteger, mustBePositive, mustBeFinite}
     end
 
@@ -1093,7 +1093,7 @@ function [K, Kinv, dK_df, dKinv_df] = make_K_and_inv(f, sizes)
 
     arguments
         f (1, 1) double {mustBePositive, mustBeFinite}
-        sizes (1, 2) double {mustBeFinite}
+        sizes (1, 3) double {mustBeFinite}
     end
 
     H = sizes(1); W = sizes(2);
@@ -1189,7 +1189,7 @@ function cameras = initializeCameraMatrices(input, pairs, imageSizes, initialTfo
     arguments
         input (1, 1) struct
         pairs (1, :) struct
-        imageSizes (:, 2) double {mustBeFinite}
+        imageSizes (:, 3) double {mustBeFinite}
         initialTforms
         seed (1, 1) double {mustBeInteger, mustBePositive, mustBeFinite}
         num_images (1, 1) double {mustBeInteger, mustBePositive, mustBeFinite}
@@ -1241,7 +1241,7 @@ function [K, R, f_used] = initializeKRf(input, pairs, imageSizes, num_images, se
     arguments
         input (1, 1) struct
         pairs (1, :) struct
-        imageSizes (:, 2) double {mustBeFinite}
+        imageSizes (:, 3) double {mustBeFinite}
         num_images (1, 1) double {mustBeInteger, mustBePositive, mustBeFinite}
         seed (1, 1) double {mustBeInteger, mustBePositive, mustBeFinite}
         initialTforms
@@ -1748,7 +1748,7 @@ function Hji = getHomog_j_to_i(input, pair, imageSizes, initialTforms) %#ok<INUS
     arguments
         input (1, 1) struct
         pair (1, 1) struct
-        imageSizes (:, 2) double {mustBeFinite}
+        imageSizes (:, 3) double {mustBeFinite}
         initialTforms
     end
 

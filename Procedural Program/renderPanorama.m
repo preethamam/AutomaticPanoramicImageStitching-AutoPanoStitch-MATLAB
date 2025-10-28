@@ -1,22 +1,39 @@
 function [panorama, rgbAnnotation] = renderPanorama(images, cameras, mode, ref_idx, opts)
-    % mode: 'cylindrical' | 'spherical' | 'planar' (aka 'perspective')
-    % cameras(i).R : world->camera (w2c)
-    % cameras(i).K : intrinsics
-    % ref_idx only used to set default panorama focal and (for planar) the plane frame
+    % RENDERPANORAMA Render a panorama in the chosen projection with optional blending.
+    %   [panorama, rgbAnnotation] = renderPanorama(images, cameras, mode, ref_idx, opts)
+    %   composes the set of input images onto a common panorama surface using the
+    %   provided camera intrinsics/extrinsics. Supports multiple projection modes and
+    %   blending strategies, with optional GPU acceleration and tiling for memory.
     %
-    % SPEED TIPS:
-    %   - Set opts.use_gpu = true (requires Parallel Toolbox & GPU) for big boosts.
-    %   - Set opts.parfor = true to parallelize across cameras.
-    %   - Use tiling via opts.tile = [tileH tileW] for very large panoramas or GPUs.
+    %   Inputs
+    %   - images  : 1xN or Nx1 cell array of RGB images (uint8 or single).
+    %   - cameras : 1xN or Nx1 struct array with fields R (3x3 world->cam) and K (3x3).
+    %   - mode    : 'cylindrical' | 'spherical' | 'equirectangular' | 'planar' |
+    %               'perspective' | 'stereographic'.
+    %   - ref_idx : Reference camera index (positive integer). Used to set planar frame
+    %               and default panorama focal length.
+    %   - opts    : Options struct (fields documented inline below) controlling focal
+    %               length, resolution, tiling, GPU, blending, and annotations.
     %
-    % DEPENDS ON:
-    %   - cyl_bounds_dense_fast, sph_bounds_dense_fast, plan_bounds_dense_fast (below)
-    %   - fast_sample_block (interp2-based sampler)
-    %   - crop_nonzero_bbox (optional crop)
-    % mode: 'cylindrical' | 'spherical' | 'planar' | 'stereographic' | 'equirectangular'
-    % Notes:
-    %   - 'spherical' and 'equirectangular' are identical here (lon/lat mapping).
-    %   - 'stereographic' is a fisheye-like projection centered on ref view.
+    %   Outputs
+    %   - panorama      : Rendered panorama image as uint8 [H x W x 3].
+    %   - rgbAnnotation : Optional annotated panorama (only when enabled in opts),
+    %                     else empty [].
+    %
+    %   Notes
+    %   - For 'spherical' and 'equirectangular', the mapping is identical here.
+    %   - 'stereographic' produces a fisheye-like projection centered on the reference view.
+    %   - Use tiling and GPU options for large panoramas to control memory usage.
+    %
+    %   See also gainCompensation, multiBandBlending, gpuArray, gather
+
+    arguments
+        images cell
+        cameras struct
+        mode {mustBeTextScalar}
+        ref_idx (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+        opts (1, 1) struct = struct()
+    end
 
     if nargin < 5, opts = struct(); end
     if ~isfield(opts, 'f_pan'), opts.f_pan = cameras(ref_idx).K(1, 1); end
@@ -218,7 +235,7 @@ function [panorama, rgbAnnotation] = renderPanorama(images, cameras, mode, ref_i
         opts.tile = [side side];
     end
 
-    % (B) optional global gains from sparse overlaps
+    % Warp weights for all images (for gain compensation and blending)
     srcW = warpWeights(images, N);
 
     if opts.gain_compensation
@@ -400,6 +417,25 @@ end
 
 % Per-blending-mode tile worker -------------------------------------------
 function [F_tile, Wsum_tile] = fuse_tile(rr, cc, DWt, images, cameras, onGPU, srcW, gains, opts)
+    % FUSE_TILE Fuse a panorama tile using the selected blending strategy.
+    %   [F_tile, Wsum_tile] = fuse_tile(rr, cc, DWt, images, cameras, onGPU, srcW, gains, opts)
+    %   computes the blended RGB tile and a coverage indicator for the region
+    %   specified by rr (rows) and cc (cols) using the world direction vectors DWt.
+    %
+    %   F_tile is [ht x wt x 3] single; Wsum_tile indicates coverage.
+
+    arguments
+        rr (:, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+        cc (:, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+        DWt (:, 3) {mustBeNumeric}
+        images cell
+        cameras struct
+        onGPU (1, 1) logical
+        srcW cell
+        gains (:, 3) {mustBeNumeric}
+        opts (1, 1) struct
+    end
+
     N = numel(images);
     ht = numel(rr); wt = numel(cc);
 
@@ -417,7 +453,7 @@ function [F_tile, Wsum_tile] = fuse_tile(rr, cc, DWt, images, cameras, onGPU, sr
             end
 
             for iImg = 1:N
-                [Si, Mi, Wang, Wf] = sample_one(images{iImg}, cameras(iImg), ...
+                [Si, Mi, Wang] = sample_one(images{iImg}, cameras(iImg), ...
                     DWt, ht, wt, onGPU, ...
                     opts.angle_power, srcW{iImg}, gains(iImg, :));
                 Simg = reshape(Si, [ht wt 3]);
@@ -515,9 +551,6 @@ function [F_tile, Wsum_tile] = fuse_tile(rr, cc, DWt, images, cameras, onGPU, sr
                 F_tile(nf3) = bestRGB(nf3);
             end
 
-            % IMPORTANT: return boolean coverage, not sum of weights
-            Wsum_tile = single(any_valid);
-
             F_tile = gather(F_tile);
             Wsum_tile = gather(wsum_tile);
 
@@ -596,6 +629,27 @@ end
 % Per-image per-tile sampler (streaming) -----------------------------------
 function [S_vec, M_vec, Wang_vec, Wf_vec] = sample_one( ...
         I, cam, DWt, ht, wt, onGPU, angle_pow, srcW_i, gain_i)
+    % SAMPLE_ONE Sample one image onto a panorama tile with weights and mask.
+    %   [S_vec, M_vec, Wang_vec, Wf_vec] = sample_one(I, cam, DWt, ht, wt, onGPU, angle_pow, srcW_i, gain_i)
+    %   projects world directions DWt into image I using camera cam, then samples
+    %   colors and weights. Returns flattened vectors for colors S_vec, validity
+    %   mask M_vec, angle-based weights Wang_vec, and feather weights Wf_vec.
+
+    arguments
+        I (:, :, :) {mustBeNumeric}
+        cam (1, 1) struct
+        DWt (:, 3) {mustBeNumeric}
+        ht (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+        wt (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+        onGPU (1, 1) logical
+        angle_pow (1, 1) {mustBeNumeric, mustBeFinite}
+        srcW_i (:, :) {mustBeNumeric}
+        gain_i (1, 3) {mustBeNumeric}
+    end
+
+    if ~isfield(cam, 'R') || ~isfield(cam, 'K')
+        error('sample_one:CamFields', 'cam must contain fields R and K.');
+    end
 
     % Convert & gain
     if isa(I, 'uint8'), Ic = single(I) / 255; else, Ic = single(I); end
@@ -642,6 +696,24 @@ function [S_vec, M_vec, Wang_vec, Wf_vec] = sample_one( ...
 end
 
 function [xBoxes, yBoxes, centers] = all_warped_boxes(images, cameras, mode, ref_idx, opts, u0, v0, th0, h0, ph0)
+    % ALL_WARPED_BOXES Compute projected image boxes and centers on the panorama.
+    %   [xBoxes, yBoxes, centers] = all_warped_boxes(images, cameras, mode, ref_idx, opts, ...)
+    %   returns polygon coordinates and centers for each input image in panorama
+    %   coordinates for annotation.
+
+    arguments
+        images cell
+        cameras struct
+        mode {mustBeTextScalar}
+        ref_idx (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+        opts (1, 1) struct
+        u0
+        v0
+        th0
+        h0
+        ph0
+    end
+
     N = numel(images);
     xBoxes = cell(N, 1); yBoxes = cell(N, 1); centers = zeros(N, 2);
 
@@ -655,6 +727,27 @@ end
 
 function [xPoly, yPoly, centroid] = warped_box_in_pano(imageSize, cam, mode, ...
         ref_idx, cameras, opts, u0, v0, th0, h0, ph0, f_pan)
+    % WARPED_BOX_IN_PANO Project the image boundary into panorama coordinates.
+    %   [xPoly, yPoly, centroid] = warped_box_in_pano(imageSize, cam, mode, ref_idx, cameras, opts, ...)
+    %   computes the 4-corner polygon and its centroid on the panorama surface.
+
+    arguments
+        imageSize (:, :) {mustBeNumeric}
+        cam (1, 1) struct
+        mode {mustBeTextScalar}
+        ref_idx (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+        cameras struct
+        opts (1, 1) struct
+        u0
+        v0
+        th0
+        h0
+        ph0
+        f_pan (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+    end
+
+    %#ok<*NASGU> % Silence potential unused-arg warnings for validated inputs
+    opts = opts; % touch to satisfy linter if not used in all modes
 
     Hc = imageSize(1); Wc = imageSize(2);
     corners = [1, 1; 1, Wc; Hc, Wc; Hc, 1]; % [row, col]
@@ -712,6 +805,15 @@ function [xPoly, yPoly, centroid] = warped_box_in_pano(imageSize, cam, mode, ...
 end
 
 function srcW = warpWeights(images, N)
+    % WARPWEIGHTS Build simple per-image feathering weights.
+    %   srcW = warpWeights(images, N) returns a cell array of [h x w] single
+    %   weight maps with a gentle center emphasis, one per input image.
+
+    arguments
+        images cell
+        N (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+    end
+
     srcW = cell(N, 1);
 
     for i = 1:N
@@ -729,10 +831,22 @@ end
 
 % ============================================================
 function S = fast_sample_block(Ic, u, v, H, W, onGPU)
-    % Vectorized bilinear sampling using interp2 with NaN extrapolation.
-    % Ic : [h x w x C] (single, CPU or gpuArray). C can be 1 or 3 (or any).
-    % u,v: [HW x 1] single (same device as Ic if onGPU==true)
-    % S  : [HW x C] (same device as u/v). NaNs for out-of-bounds.
+    % FAST_SAMPLE_BLOCK Vectorized bilinear sampling using interp2 with NaN extrapolation.
+    %   S = fast_sample_block(Ic, u, v, H, W, onGPU) samples the C-channel image Ic at
+    %   query points (u,v) and returns S as a [numel(u) x C] array. Out-of-bounds yield NaN.
+
+    arguments
+        Ic (:, :, :) {mustBeNumeric}
+        u (:, 1) {mustBeNumeric}
+        v (:, 1) {mustBeNumeric}
+        H (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+        W (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+        onGPU (1, 1) logical
+    end
+
+    % Touch H/W to avoid unused-arg warnings given signature constraints
+    H = H; %#ok<NASGU>
+    W = W; %#ok<NASGU>
 
     [h, w, C] = size(Ic); %#ok<ASGLU> % h,w unused except for grid creation
 
@@ -774,6 +888,16 @@ end
 
 % ============================================================
 function [pano_cropped, rect, didCrop] = crop_nonzero_bbox(panorama, canvas_color)
+    % CROP_NONZERO_BBOX Crop panorama to non-canvas content with small padding.
+    %   [pano_cropped, rect, didCrop] = crop_nonzero_bbox(panorama, canvas_color)
+    %   returns the cropped panorama, the crop rectangle [r1 r2 c1 c2], and a
+    %   boolean didCrop.
+
+    arguments
+        panorama (:, :, :) {mustBeNumeric}
+        canvas_color {mustBeTextScalar}
+    end
+
     % rect = [r1 r2 c1 c2] (1-based, inclusive), didCrop = true if cropped
 
     G = rgb2gray(panorama);
@@ -803,6 +927,15 @@ end
 
 % ============================================================
 function [th_min, th_max, h_min, h_max] = cylindrical_bounds(cams, imgSize)
+    % CYLINDRICAL_BOUNDS Compute cylindrical bounds (theta,h) over all cameras.
+    %   [th_min, th_max, h_min, h_max] = cylindrical_bounds(cams, imgSize)
+    %   samples each camera frame and accumulates global min/max in cylindrical coords.
+
+    arguments
+        cams struct
+        imgSize (:, 2) {mustBeNumeric}
+    end
+
     th_min = inf; th_max = -inf; h_min = inf; h_max = -inf;
     nx = 48; ny = 32;
 
@@ -823,6 +956,15 @@ function [th_min, th_max, h_min, h_max] = cylindrical_bounds(cams, imgSize)
 end
 
 function [th_min, th_max, ph_min, ph_max] = spherical_bounds(cams, imgSize)
+    % SPHERICAL_BOUNDS Compute spherical bounds (theta,phi) over all cameras.
+    %   [th_min, th_max, ph_min, ph_max] = spherical_bounds(cams, imgSize)
+    %   samples each camera frame and accumulates global min/max in spherical coords.
+
+    arguments
+        cams struct
+        imgSize (:, 2) {mustBeNumeric}
+    end
+
     th_min = inf; th_max = -inf; ph_min = inf; ph_max = -inf;
     nx = 48; ny = 32;
 
@@ -844,17 +986,17 @@ end
 
 function [u_min, u_max, v_min, v_max] = planar_bounds( ...
         cams, imgSize, Rref, robust_pct, uv_abs_cap)
-    % Robust bounds on the reference image plane z_ref = +1.
-    % - Discards rays with tiny z (grazing).
-    % - Per-camera percentile clipping (e.g., [1 99]).
-    % - Hard caps |u|,|v| to uv_abs_cap to guard pathological cases.
-    %
-    % Inputs:
-    %   robust_pct = [lo hi], e.g., [1 99]
-    %   uv_abs_cap = scalar, e.g., 8.0  (≈ ~130° half-FOV in plane units)
-    %
-    % Notes:
-    %   u = x/z, v = y/z in ref camera coords (z>0 only).
+    % PLANAR_BOUNDS Robust bounds on the reference image plane z_ref = +1.
+    %   [u_min, u_max, v_min, v_max] = planar_bounds(cams, imgSize, Rref, robust_pct, uv_abs_cap)
+    %   computes planar coordinate bounds with percentile clipping and hard caps.
+
+    arguments
+        cams struct
+        imgSize (:, 2) {mustBeNumeric}
+        Rref (3, 3) {mustBeNumeric, mustBeFinite}
+        robust_pct (1, 2) {mustBeNumeric}
+        uv_abs_cap (1, 1) {mustBeNumeric}
+    end
 
     u_min = inf; u_max = -inf;
     v_min = inf; v_max = -inf;
@@ -919,12 +1061,17 @@ end
 
 function [a_min, a_max, b_min, b_max] = stereographic_bounds( ...
         cams, imgSize, Rref, robust_pct, abs_cap)
-    % Robust bounds on the stereographic plane (tangent at +Z_ref; projected from -Z_ref).
-    % - Transform rays into the REF camera frame
-    % - Normalize to unit directions
-    % - Forward stereographic map: a = x/(1+z), b = y/(1+z)
-    % - Percentile-clip per camera, then take global min/max
-    % - Hard cap |a|,|b| by abs_cap (similar spirit to planar uv_abs_cap)
+    % STEREOGRAPHIC_BOUNDS Robust bounds on the stereographic plane.
+    %   [a_min, a_max, b_min, b_max] = stereographic_bounds(cams, imgSize, Rref, robust_pct, abs_cap)
+    %   computes bounds after stereographic mapping with percentile clipping and caps.
+
+    arguments
+        cams struct
+        imgSize (:, 2) {mustBeNumeric}
+        Rref (3, 3) {mustBeNumeric, mustBeFinite}
+        robust_pct (1, 2) {mustBeNumeric}
+        abs_cap (1, 1) {mustBeNumeric}
+    end
 
     a_min = inf; a_max = -inf;
     b_min = inf; b_max = -inf;

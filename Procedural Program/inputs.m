@@ -18,6 +18,7 @@ end
 
 % Folder name that consists of the images set
 folderName = '';
+input.imageSaveFolder = 'E:\AutoPanoStitch';
 
 %% Inputs 2
 %--------------------------------------------------------------------------
@@ -94,16 +95,16 @@ input.MBBsigma = 1; % Multi-band Gaussian sigma
 input.resizeImage = 1; % Resize input images
 input.resizeStitchedImage = 0; % Resize stitched image
 input.panorama2DisplaynSave = ... % "planar" | "cylindrical" | "spherical" | "equirectangular" | "stereographic" | Use:[]
-"spherical"; %      ["planar", "cylindrical", "spherical" ...
-% "equirectangular", "stereographic"];
+"spherical"; %["planar", "cylindrical", "spherical", ...
+               %"equirectangular", "stereographic"];
 
 % Post-processing
 input.canvas_color = 'black'; % Panorama canvas color 'black' | 'white'
 input.blackRange = 0; % Minimum dark pixel value to crop panaroma
 input.whiteRange = 250; % Minimum bright pixel value to crop panaroma
 input.showKeypointsPlot = 0; % Display keypoints plot (parfor suppresses this flag, so no use)
-input.displayPanoramas = true; % Display panoramas in figure
+input.displayPanoramas = false; % Display panoramas in figure
 input.showPanoramaImgsNums = false; % Display the panorama images with numbers after tranform 0 or 1
 input.showCropBoundingBox = false; % Display cropping bounding box 0 | 1
 input.cropPanorama = false; % Write panorama image to disk 0 | 1
-input.imageWrite = false; % Write panorama image to disk 0 | 1
+input.imageWrite = true; % Write panorama image to disk 0 | 1

@@ -1,10 +1,55 @@
 function [model, inliers, isFound] = estimateTransformationRANSAC(matchedPoints1, matchedPoints2, transformType, input)
+    %ESTIMATETRANSFORMATIONRANSAC Robust 2-D transform estimation using RANSAC.
+    %
+    % Syntax
+    %   [model, inliers, isFound] = estimateTransformationRANSAC(matchedPoints1, matchedPoints2, transformType)
+    %   [model, inliers, isFound] = estimateTransformationRANSAC(matchedPoints1, matchedPoints2, transformType, input)
+    %
+    % Description
+    %   Estimates a geometric transformation between matched 2-D point sets using
+    %   a RANSAC loop with model-specific minimal samples. Supports transform types:
+    %   'translation', 'rigid', 'similarity', 'affine', and 'projective'. Returns
+    %   the 3x3 transform matrix, a logical inlier vector, and a success flag.
+    %
+    % Inputs
+    %   matchedPoints1 - M-by-2 double array of [x y] points (source).
+    %   matchedPoints2 - M-by-2 double array of [x y] points (destination).
+    %   transformType  - Char/string: 'translation'|'rigid'|'similarity'|'affine'|'projective'.
+    %   input          - Optional struct with fields:
+    %                    • maxDistance (scalar pixels)         - Inlier threshold.
+    %                    • inliersConfidence (0-100)           - Desired confidence (%).
+    %                    • maxIter (integer)                   - Max RANSAC iterations.
+    %                    • recomputeFromInliers (logical)      - Refit using all inliers (default true).
+    %
+    % Outputs
+    %   model   - 3-by-3 homogeneous transform matrix.
+    %   inliers - M-by-1 logical vector marking inlier correspondences.
+    %   isFound - Logical flag indicating if a valid model was found.
+    %
+    % Notes
+    %   - Minimal sample size depends on the model: 1 (translation), 2 (rigid/similarity),
+    %     3 (affine), 4 (projective).
+    %   - Internally adapts iteration budget based on observed inlier ratio.
+    %   - Uses normalized DLT forms for affine/projective; median-based estimate for translation.
+
+    arguments
+        matchedPoints1 (:, 2) double
+        matchedPoints2 (:, 2) double
+        transformType {mustBeTextScalar}
+        input struct = struct()
+    end
+
     % Suppress warnings about matrix singularity
     warning('off', 'MATLAB:singularMatrix');
     warning('off', 'MATLAB:nearlySingularMatrix');
 
     % Ensure warnings are restored when function exits
     cleanupObj = onCleanup(@() warning('on', 'all'));
+
+    % Early consistency check
+    if size(matchedPoints1, 1) ~= size(matchedPoints2, 1)
+        error('estimateTransformationRANSAC:PointCountMismatch', 'matchedPoints1 and matchedPoints2 must have the same number of rows.');
+    end
 
     % Set default parameters if not provided
     if nargin < 4
@@ -141,6 +186,23 @@ end
 % Transformation estimation functions
 %--------------------------------------------------------------------------
 function H = estimateHomography(pts1, pts2)
+    %ESTIMATEHOMOGRAPHY Estimate 3x3 projective transform via normalized DLT.
+    %
+    % Syntax
+    %   H = estimateHomography(pts1, pts2)
+    %
+    % Inputs
+    %   pts1 - N-by-2 source points.
+    %   pts2 - N-by-2 destination points.
+    %
+    % Output
+    %   H    - 3-by-3 homography matrix.
+
+    arguments
+        pts1 (:, 2) double
+        pts2 (:, 2) double
+    end
+
     % Homography estimation using normalized DLT
     [pts1_norm, T1] = normalizePoints(pts1);
     [pts2_norm, T2] = normalizePoints(pts2);
@@ -163,6 +225,23 @@ function H = estimateHomography(pts1, pts2)
 end
 
 function H = estimateAffine(pts1, pts2)
+    %ESTIMATEAFFINE Estimate 2-D affine transform using normalized DLT.
+    %
+    % Syntax
+    %   H = estimateAffine(pts1, pts2)
+    %
+    % Inputs
+    %   pts1 - N-by-2 source points.
+    %   pts2 - N-by-2 destination points.
+    %
+    % Output
+    %   H    - 3-by-3 affine transform matrix.
+
+    arguments
+        pts1 (:, 2) double
+        pts2 (:, 2) double
+    end
+
     % Affine estimation using normalized DLT with improved constraints
     [pts1_norm, T1] = normalizePoints(pts1);
     [pts2_norm, T2] = normalizePoints(pts2);
@@ -208,6 +287,23 @@ function H = estimateAffine(pts1, pts2)
 end
 
 function H = estimateSimilarity(pts1, pts2)
+    %ESTIMATESIMILARITY Estimate similarity transform (scale, rotation, translation).
+    %
+    % Syntax
+    %   H = estimateSimilarity(pts1, pts2)
+    %
+    % Inputs
+    %   pts1 - N-by-2 source points.
+    %   pts2 - N-by-2 destination points.
+    %
+    % Output
+    %   H    - 3-by-3 similarity transform matrix.
+
+    arguments
+        pts1 (:, 2) double
+        pts2 (:, 2) double
+    end
+
     % Similarity estimation with improved normalization and constraints
     [pts1_norm, T1] = normalizePoints(pts1);
     [pts2_norm, T2] = normalizePoints(pts2);
@@ -253,6 +349,23 @@ function H = estimateSimilarity(pts1, pts2)
 end
 
 function H = estimateRigid(pts1, pts2)
+    %ESTIMATERIGID Estimate rigid transform (rotation + translation).
+    %
+    % Syntax
+    %   H = estimateRigid(pts1, pts2)
+    %
+    % Inputs
+    %   pts1 - N-by-2 source points.
+    %   pts2 - N-by-2 destination points.
+    %
+    % Output
+    %   H    - 3-by-3 rigid transform matrix.
+
+    arguments
+        pts1 (:, 2) double
+        pts2 (:, 2) double
+    end
+
     % Rigid transform estimation with improved robustness
     [pts1_norm, T1] = normalizePoints(pts1);
     [pts2_norm, T2] = normalizePoints(pts2);
@@ -279,7 +392,7 @@ function H = estimateRigid(pts1, pts2)
     end
 
     % Ensure exact orthogonality
-    [Ur, Sr, Vr] = svd(R);
+    [Ur, ~, Vr] = svd(R);
     R = Ur * Vr';
 
     % Compute translation
@@ -295,6 +408,23 @@ function H = estimateRigid(pts1, pts2)
 end
 
 function H = estimateTranslation(pts1, pts2)
+    %ESTIMATETRANSLATION Estimate pure translation using median displacement.
+    %
+    % Syntax
+    %   H = estimateTranslation(pts1, pts2)
+    %
+    % Inputs
+    %   pts1 - N-by-2 source points.
+    %   pts2 - N-by-2 destination points.
+    %
+    % Output
+    %   H    - 3-by-3 translation transform matrix.
+
+    arguments
+        pts1 (:, 2) double
+        pts2 (:, 2) double
+    end
+
     % Translation estimation without normalization for large scale translations
     translations = pts2 - pts1;
 
@@ -312,6 +442,30 @@ end
 % Inlier function
 %--------------------------------------------------------------------------
 function [inliers, errors] = findInliers(H, pts1_homog, pts2_homog, threshold, params)
+    %FINDINLIERS Compute inliers and residuals for a candidate transform.
+    %
+    % Syntax
+    %   [inliers, errors] = findInliers(H, pts1_homog, pts2_homog, threshold, params)
+    %
+    % Inputs
+    %   H           - 3-by-3 transform matrix.
+    %   pts1_homog  - N-by-3 homogeneous source points.
+    %   pts2_homog  - N-by-3 homogeneous destination points.
+    %   threshold   - Scalar inlier threshold (pixels; normalized for translation path).
+    %   params      - Struct with fields 'type' and 'minPoints'.
+    %
+    % Outputs
+    %   inliers     - N-by-1 logical vector of inliers.
+    %   errors      - N-by-1 residual distances.
+
+    arguments
+        H (3, 3) double
+        pts1_homog (:, 3) double
+        pts2_homog (:, 3) double
+        threshold (1, 1) double
+        params (1, 1) struct
+    end
+
     % Transform points
     transformed = (H * pts1_homog')';
     transformed = bsxfun(@rdivide, transformed, transformed(:, 3));
@@ -362,6 +516,18 @@ function [inliers, errors] = findInliers(H, pts1_homog, pts2_homog, threshold, p
 end
 
 function tf = checkModel(H)
+    %CHECKMODEL Validate transformation matrix properties.
+    %
+    % Input
+    %   H - 3-by-3 transform matrix.
+    %
+    % Output
+    %   tf - Logical true if H is finite, well-conditioned, and non-singular.
+
+    arguments
+        H (3, 3) double
+    end
+
     % Check if transformation matrix is valid
     tf = all(isfinite(H(:))) && ... % All elements are finite
         rcond(H) > eps && ... % Matrix is well-conditioned
@@ -369,6 +535,22 @@ function tf = checkModel(H)
 end
 
 function isDegen = isDegenerate(points, transformType)
+    %ISDEGENERATE Detect degenerate point configurations for a model.
+    %
+    % Syntax
+    %   isDegen = isDegenerate(points, transformType)
+    %
+    % Inputs
+    %   points         - N-by-2 points.
+    %   transformType  - Char/string model: 'projective'|'affine'|...
+    %
+    % Output
+    %   isDegen        - Logical true if configuration is degenerate for model.
+
+    arguments
+        points (:, 2) double
+        transformType {mustBeTextScalar}
+    end
 
     if size(points, 1) < 3
         isDegen = true;
@@ -395,6 +577,22 @@ end
 % Normalization functions
 %--------------------------------------------------------------------------
 function [pts_norm, T] = normalizePoints(pts)
+    %NORMALIZEPOINTS Normalize 2-D points for numerical stability.
+    %
+    % Syntax
+    %   [pts_norm, T] = normalizePoints(pts)
+    %
+    % Input
+    %   pts      - N-by-2 inhomogeneous points.
+    %
+    % Outputs
+    %   pts_norm - N-by-2 normalized points (mean distance ~= 1).
+    %   T        - 3-by-3 normalization matrix.
+
+    arguments
+        pts (:, 2) double
+    end
+
     % Normalize points for improved numerical stability
     centroid = mean(pts);
     pts_centered = bsxfun(@minus, pts, centroid);
@@ -415,6 +613,21 @@ end
 % Helper functions
 %--------------------------------------------------------------------------
 function params = getTransformParams(transformType)
+    %GETTRANSFORMPARAMS Return minimal points and metadata for a model.
+    %
+    % Syntax
+    %   params = getTransformParams(transformType)
+    %
+    % Input
+    %   transformType - Char/string specifying the transform model.
+    %
+    % Output
+    %   params - Struct with fields: minPoints, type, dof.
+
+    arguments
+        transformType {mustBeTextScalar}
+    end
+
     % Returns parameters for different transform types
     switch lower(transformType)
         case 'projective'
@@ -444,6 +657,24 @@ function params = getTransformParams(transformType)
 end
 
 function H = estimateTransform(pts1, pts2, params)
+    %ESTIMATETRANSFORM Dispatch to model-specific estimator.
+    %
+    % Syntax
+    %   H = estimateTransform(pts1, pts2, params)
+    %
+    % Inputs
+    %   pts1   - N-by-2 source points.
+    %   pts2   - N-by-2 destination points.
+    %   params - Struct with field 'type'.
+    %
+    % Output
+    %   H      - 3-by-3 transform matrix.
+
+    arguments
+        pts1 (:, 2) double
+        pts2 (:, 2) double
+        params (1, 1) struct
+    end
 
     switch params.type
         case 'projective'
