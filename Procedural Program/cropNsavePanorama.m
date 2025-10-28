@@ -77,31 +77,31 @@ function panoStore = cropNsavePanorama(input, panoStore, myImg, datasetName)
             for jj = 1:numel(panoProjs)
                 tic;
 
-                if strcmp(panoProjs{jj}, "planar")
+                if strcmp(panoProjs{jj}, "planar") && ~isempty(panoStore(ii).planar)
                     projName = "planar";
                     croppedPanorama = panoramaCropper(input, panoStore(ii).planar{1});
                     panoStore(ii).planar{3} = croppedPanorama;
                 end
 
-                if strcmp(panoProjs{jj}, "cylindrical")
+                if strcmp(panoProjs{jj}, "cylindrical") && ~isempty(panoStore(ii).cylindrical)
                     projName = "cylindrical";
                     croppedPanorama = panoramaCropper(input, panoStore(ii).cylindrical{1});
                     panoStore(ii).cylindrical{3} = croppedPanorama;
                 end
 
-                if strcmp(panoProjs{jj}, "spherical")
+                if strcmp(panoProjs{jj}, "spherical") && ~isempty(panoStore(ii).spherical)
                     projName = "spherical";
                     croppedPanorama = panoramaCropper(input, panoStore(ii).spherical{1});
                     panoStore(ii).spherical{3} = croppedPanorama;
                 end
 
-                if strcmp(panoProjs{jj}, "equirectangular")
+                if strcmp(panoProjs{jj}, "equirectangular") && ~isempty(panoStore(ii).equirectangular)
                     projName = "equirectangular";
                     croppedPanorama = panoramaCropper(input, panoStore(ii).equirectangular{1});
                     panoStore(ii).equirectangular{3} = croppedPanorama;
                 end
 
-                if strcmp(panoProjs{jj}, "stereographic")
+                if strcmp(panoProjs{jj}, "stereographic") && ~isempty(panoStore(ii).stereographic)
                     projName = "stereographic";
                     croppedPanorama = panoramaCropper(input, panoStore(ii).stereographic{1});
                     panoStore(ii).stereographic{3} = croppedPanorama;
