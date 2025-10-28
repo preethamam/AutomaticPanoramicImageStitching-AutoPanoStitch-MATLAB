@@ -21,10 +21,10 @@ AutoPanoStitch is an automatic panorama stitching package for MATLAB that detect
 
 # Requirements
 
-MATLAB `<br />`
-Computer Vision Toolbox `<br />`
-Image Processing Toolbox `<br />`
-Parallel Computing Toolbox `<br />`
+* MATLAB
+* Computer Vision Toolbox
+* Image Processing Toolbox
+* Parallel Computing Toolbox
 
 # Run command
 
@@ -154,8 +154,8 @@ Long, chain-like 1D and 2D sequences (typically more than 10–12 images) may fa
 
 ### Original work
 
-[1]. Brown, Matthew, and David G. Lowe. "Automatic panoramic image stitching using invariant features." International journal of computer vision 74 (2007): 59-73. `<br />`
-[2]. Brown, Matthew, and David G. Lowe. "Recognising panoramas." In ICCV, vol. 3, p. 1218. 2003.
+1. Brown, Matthew, and David G. Lowe. "Automatic panoramic image stitching using invariant features." International journal of computer vision 74 (2007): 59-73.
+2. Brown, Matthew, and David G. Lowe. "Recognising panoramas." In ICCV, vol. 3, p. 1218. 2003.
 
 ```bibtex
 @article{brown2007automatic,
