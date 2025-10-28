@@ -1,98 +1,89 @@
-function [allPanoramas, annoRGBPanoramas] = displayPanorama(input, finalPanoramaTforms, ...
-                                                finalrefIdxs, images)
+function panoStore = displayPanorama(input, finalPanoramaTforms, ...
+                                finalrefIdxs, imagesAll, panoIndices)
 
-    %%***********************************************************************%
-    %*                   Automatic panorama stitching                       *%
-    %*                        Display panorama                              *%
-    %*                                                                      *%
-    %* Code author: Preetham Manjunatha                                     *%
-    %* Github link: https://github.com/preethamam                           *%
-    %* Date: 10/21/2025                                                     *%
-    %************************************************************************%
-    
     % Initialize
-    allPanoramas = cell(length(finalPanoramaTforms),5);
-    annoRGBPanoramas = cell(length(finalPanoramaTforms),5);
-    
+    panoStore = struct();
+
     for ii = 1:length(finalPanoramaTforms)
 
         % Close all figures
         close all;
-
         cameras = finalPanoramaTforms{ii};
         refIdx = finalrefIdxs(ii);
 
         % Example call after your BA
-        opts = struct('f_pan', cameras(refIdx).K(1,1), 'res_scale',1.0, ...
-                      'angle_power',2, 'crop_border',true, ...
-                      'canvas_color', input.canvas_color, ...
-                      'sigma_N', input.sigmaN,...
-                      'sigma_g', input.sigmag, ...
-                      'pyr_levels', input.bands, ...
-                      'blending', input.blending, ...
-                      'pyr_sigma', input.MBBsigma, ...
-                      'showPanoramaImgsNums', input.showPanoramaImgsNums, ...
-                      'showCropBoundingBox', input.showCropBoundingBox);
-        
+        opts = struct('f_pan', cameras(refIdx).K(1, 1), 'res_scale', 1.0, ...
+            'angle_power', 2, 'crop_border', true, ...
+            'canvas_color', input.canvas_color, ...
+            'gain_compensation', input.gainCompensation, ...
+            'sigma_N', input.sigmaN, ...
+            'sigma_g', input.sigmag, ...
+            'pyr_levels', input.bands, ...
+            'blending', input.blending, ...
+            'pyr_sigma', input.MBBsigma, ...
+            'showPanoramaImgsNums', input.showPanoramaImgsNums, ...
+            'showCropBoundingBox', input.showCropBoundingBox);
+
         % Render all projections panorama
-        renderPlanartic = tic;  
-        [panoramaPlanar, annoRGBPlanar] = renderPanorama(images, cameras, 'planar', refIdx, opts);
-        fprintf('Planar panorama rendering time : %f seconds\n', toc(renderPlanartic));
+        for jj = 1:numel(input.panorama2DisplaynSave)
+            projection = input.panorama2DisplaynSave(jj);
+            [panorama, annoRGB] = renderPanorama(imagesAll(panoIndices{ii}), cameras, projection, refIdx, opts);
 
-        renderCylindricaltic = tic;  
-        [panoramaCylindrical, annoRGBCylindrical] = renderPanorama(images, cameras, 'cylindrical', refIdx, opts);
-        fprintf('Cylindrical panorama rendering time : %f seconds\n', toc(renderCylindricaltic));
-        
-        renderSphericaltic = tic;  
-        [panoramaSpherical, annoRGBSpherical] = renderPanorama(images, cameras, 'spherical',   refIdx, opts);
-        fprintf('Spherical panorama rendering time : %f seconds\n', toc(renderSphericaltic));
+            % Store panoramas
+            if strcmp(projection, "planar")
+                panoStore(ii).planar = {panorama, annoRGB};
+            elseif strcmp(projection, "cylindrical")
+                panoStore(ii).cylindrical = {panorama, annoRGB};
+            elseif strcmp(projection, "spherical")
+                panoStore(ii).spherical = {panorama, annoRGB};
+            elseif strcmp(projection, "equirectangular")
+                panoStore(ii).equirectangular = {panorama, annoRGB};
+            elseif strcmp(projection, "stereographic")
+                panoStore(ii).stereographic = {panorama, annoRGB};
+            end
 
-        renderEquirectangulartic = tic;  
-        [panoramaEquirectangular, annoRGBEquirectangular] = renderPanorama(images, cameras, 'equirectangular', refIdx, opts);
-        fprintf('Equirectangular panorama rendering time : %f seconds\n', toc(renderEquirectangulartic));
-        
-        renderStereographictic = tic;  
-        [panoramaStereographic, annoRGBStereographic] = renderPanorama(images, cameras, 'stereographic', refIdx, opts);
-        fprintf('Stereographic panorama rendering time : %f seconds\n', toc(renderStereographictic));
+        end
 
-        
-        % Store panoramas
-        allPanoramas{ii,1}     = panoramaPlanar;
-        allPanoramas{ii,2}     = panoramaCylindrical;
-        allPanoramas{ii,3}     = panoramaSpherical;
-        allPanoramas{ii,4}     = panoramaEquirectangular;
-        allPanoramas{ii,5}     = panoramaStereographic;
-
-        annoRGBPanoramas{ii,1} = annoRGBPlanar;
-        annoRGBPanoramas{ii,2} = annoRGBCylindrical;
-        annoRGBPanoramas{ii,3} = annoRGBSpherical;
-        annoRGBPanoramas{ii,4} = annoRGBEquirectangular;
-        annoRGBPanoramas{ii,5} = annoRGBStereographic;
-            
-        if input.displayPanoramas           
+        if input.displayPanoramas
             % Full planar panorama
-            figure('Name','Planar panorama');
-            imshow(panoramaPlanar)                     
-            
-            % ---------------------------------------------------------------
-            % Full cylindrical panorama          
-            figure('Name','Cyllindrical panorama');
-            imshow(panoramaCylindrical)
-         
-            % ---------------------------------------------------------------
-            % Full Spherical panorama         
-            figure('Name','Spherical panorama');
-            imshow(panoramaSpherical) 
+            if isfield(panoStore, "planar")
+                figure('Name', 'Planar panorama');
+                imshow(panoStore(ii).planar{1})
+            end
 
             % ---------------------------------------------------------------
-            % Full equirectangular panorama          
-            figure('Name','Equirectangular panorama');
-            imshow(panoramaEquirectangular)
-         
+            % Full cylindrical panorama
+            if isfield(panoStore, "cylindrical")
+                figure('Name', 'Cyllindrical panorama');
+                imshow(panoStore(ii).cylindrical{1})
+            end
+
             % ---------------------------------------------------------------
-            % Full stereographic panorama         
-            figure('Name','Stereographic panorama');
-            imshow(panoramaStereographic) 
-        end    
+            % Full Spherical panorama
+            if isfield(panoStore, "spherical")
+                figure('Name', 'Spherical panorama');
+                imshow(panoStore(ii).spherical{1})
+            end
+
+            % ---------------------------------------------------------------
+            % Full equirectangular panorama
+            if isfield(panoStore, "equirectangular")
+                figure('Name', 'Equirectangular panorama');
+                imshow(panoStore(ii).equirectangular{1})
+            end
+
+            % ---------------------------------------------------------------
+            % Full stereographic panorama
+            if isfield(panoStore, "stereographic")
+                figure('Name', 'Stereographic panorama');
+                imshow(panoStore(ii).stereographic{1})
+            end
+
+        end
+        
+        % Pause to visuzalize the panorama
+        pause(0)
+
     end
+
 end

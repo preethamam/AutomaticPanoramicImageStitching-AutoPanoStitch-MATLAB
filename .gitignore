@@ -35,6 +35,8 @@ scrachPaper.m
 !assets/grand_canyon_01.jpeg
 !assets/grand_canyon_02.jpeg
 
+Procedural Program/buggy_imagesets.txt
+
 # Ignore files related to API keys
 .env
 

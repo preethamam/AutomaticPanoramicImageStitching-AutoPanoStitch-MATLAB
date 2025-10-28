@@ -5,9 +5,9 @@
 %//%*                    Name: Dr. Preetham Manjunatha                      *%
 %//%*               GitHub: https://github.com/preethamam	                *%
 %//%*                   Repo Name: AutoPanoStitch                           *%
-%//%*                    Written Date: 04/01/2022                           *%
+%//%*                    Rewritten Date: 10/26/2026                         *%
 %%***************************************************************************%
-%* Citation 1: Automatic Panoramic Image Stitching using Invariant Features.*% 
+%* Citation 1: Automatic Panoramic Image Stitching using Invariant Features.*%
 %* M. Brown and D. Lowe. International Journal of Computer Vision. 74(1),   *%
 %* pages 59-73, 2007                                                        *%
 %*                                                                          *%
@@ -19,9 +19,9 @@
 %% Start
 %--------------------------------------------------------------------------
 clear; close all; clc;
-clcwaitbarz = findall(0,'type','figure','tag','TMWWaitbar');
+clcwaitbarz = findall(0, 'type', 'figure', 'tag', 'TMWWaitbar');
 delete(clcwaitbarz);
-warning('off','all');
+warning('off', 'all');
 
 %% Get inputs
 %--------------------------------------------------------------------------
@@ -33,84 +33,94 @@ inputs;
 %--------------------------------------------------------------------------
 % Parallel pools
 %--------------------------------------------------------------------------
-if(isempty(gcp('nocreate')))
-    if strcmp(input.poolType,'numcores')
+if (isempty(gcp('nocreate')))
+
+    if strcmp(input.poolType, 'numcores')
         parpool(input.numCores);
     else
         parpool('Threads')
     end
+
 end
 
 Start = tic;
-warning('off','all')
+warning('off', 'all')
 
 %% Get image filenames and store image names
 %--------------------------------------------------------------------------
 % Image sets
 %--------------------------------------------------------------------------
-imgFolders = dir(fullfile(folderPath,folderName));
+imgFolders = dir(fullfile(folderPath, folderName));
 imgFolders = imgFolders([imgFolders(:).isdir]);
-imgFolders = imgFolders(~ismember({imgFolders(:).name},{'.','..'}));
+imgFolders = imgFolders(~ismember({imgFolders(:).name}, {'.', '..'}));
 
 % Dataset name and folders length
-datasetName  = {imgFolders.name}';
+datasetName = {imgFolders.name}';
 foldersLen = length(datasetName);
 
 %% Panorama stitcher
 %--------------------------------------------------------------------------
 % Stitches panoramas
 %--------------------------------------------------------------------------
-for myImg = 5 %20 %1:foldersLen
+for myImg = 17 %1:foldersLen
     stitchStart = tic;
     fprintf('Image number: %i | Current folder: %s\n', myImg, imgFolders(myImg).name);
-    
+
     %% Load images
     loadimagestic = tic;
     [keypoints, allDescriptors, images, imageSizes, imageNames, numImg] = loadImages(input, imgFolders, myImg);
-    fprintf('Loading images (+ features): %f seconds\n', toc(loadimagestic));
+    fprintf('Loaded %d images (+ features): %f seconds\n', numel(images), toc(loadimagestic));
 
-    %% Get feature matrices and keypoints    
+    %% Get feature matrices and keypoints
     featureMatchtic = tic;
     matches = featureMatching(input, allDescriptors, numImg);
-    fprintf('Matching features : %f seconds\n', toc(featureMatchtic));
-    
-    %% Find matches        
+    fprintf('Matched features: %f seconds\n', toc(featureMatchtic));
+
+    %% Find matches
     imageMatchtic = tic;
     [allMatches, numMatches, initialTforms] = imageMatching(input, numImg, keypoints, matches, images);
-    fprintf('Matching images: %f seconds\n', toc(imageMatchtic));               
-
-    %% Bundle adjustment
-    bALMtic = tic;
-    [bundlerTforms, concomps, imageNeighbors, finalrefIdxs] = bundleAdjustmentLM(input, matches, keypoints, imageSizes, initialTforms, numMatches);
-    fprintf('Final alignment (Bundle adjustment): %f seconds\n', toc(bALMtic));  
+    fprintf('Matched images: %f seconds\n', toc(imageMatchtic));
     
+    % Image matches check
+    if sum(sum(numMatches)) == 0, fprintf('No images matched.\n'), continue; end
+
+    %% Recognize panoramas and perform bundle adjustment
+    recPanosnBAtic = tic;
+    [bundlerTforms, finalrefIdxs, panoIndices, concomps, panaromaCCs, connCompsNumber] = recognizePanoramas(input, ...
+                numMatches, matches, keypoints, imageSizes, initialTforms);
+    fprintf('Recognized panoramas: %f seconds\n', toc(recPanosnBAtic));
+
     %% Automatic panorama straightening
     straightentic = tic;
-    finalPanoramaTforms = straightening({bundlerTforms});    
+    finalPanoramaTforms = straightening(bundlerTforms);
     fprintf('Automatic panorama straightening: %f seconds\n', toc(straightentic));
 
     %% Render and display panoramas
-    rendertic = tic;    
-    [allPanoramas, annotatedPanoramas] = displayPanorama(input, finalPanoramaTforms, finalrefIdxs, images);
-    fprintf('Rendering and display time : %f seconds\n', toc(rendertic));
+    rendertic = tic;
+    panoStoreRGBAnno = displayPanorama(input, finalPanoramaTforms, finalrefIdxs, images, panoIndices);
+    fprintf('Rendering and display time: %f seconds\n', toc(rendertic));
 
     %% Crop and save panoramas
-    cropsavetic = tic;    
-    croppedPanoramas = cropNsavePanorama(input, allPanoramas, annotatedPanoramas, myImg, datasetName);
-    fprintf('Crop and save time : %f seconds\n', toc(cropsavetic));
+    cropsavetic = tic;
+    panoStoreRGBCropAnno = cropNsavePanorama(input, panoStoreRGBAnno, myImg, datasetName);
+    fprintf('Crop and save time: %f seconds\n', toc(cropsavetic));
 
-    fprintf('Total runtime (stitching) : %f seconds\n', toc(stitchStart));
-    fprintf('----------------------------------------------------------------\n\n', toc); %#ok<CTPCT>        
+    %% Print complete runtime to stitch images
+    fprintf('----------------------------------------------------------------------------------------\n');
+    fprintf('Total runtime (stitching): %f seconds\n', toc(stitchStart));
+    fprintf('----------------------------------------------------------------------------------------\n\n', toc); %#ok<CTPCT>
 end
 
 %% End parameters
 %--------------------------------------------------------------------------
-clcwaitbarz = findall(0,'type','figure','tag','TMWWaitbar');
+clcwaitbarz = findall(0, 'type', 'figure', 'tag', 'TMWWaitbar');
 delete(clcwaitbarz);
 statusFclose = fclose('all');
-if(statusFclose == 0)
+
+if (statusFclose == 0)
     disp('All files are closed.')
 end
+
 Runtime = toc(Start);
 fprintf('Total runtime : %f seconds\n', Runtime);
 currtime = datetime('now');

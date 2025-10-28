@@ -1,69 +1,105 @@
-function croppedPanoramas = cropNsavePanorama(input, allPanoramas, annotatedPanoramas, ...
-                                              myImg, datasetName)
-    
-    croppedPanoramas = cell(length(allPanoramas), 5);
-    for ii = 1:size(allPanoramas,1)        
+function panoStore = cropNsavePanorama(input, panoStore, myImg, datasetName)
+
+    for ii = 1:numel(panoStore)
         % Panorama cropper
         if input.cropPanorama == 1
-            croppedPanoramas{ii,1} = panoramaCropper(input, allPanoramas{ii,1});   
-            croppedPanoramas{ii,2} = panoramaCropper(input, allPanoramas{ii,2});   
-            croppedPanoramas{ii,3} = panoramaCropper(input, allPanoramas{ii,3});   
-            croppedPanoramas{ii,4} = panoramaCropper(input, allPanoramas{ii,4});   
-            croppedPanoramas{ii,5} = panoramaCropper(input, allPanoramas{ii,5});   
+
+            for jj = 1:numel(fieldnames(panoStore))
+                tic;
+
+                if isfield(panoStore, "planar")
+                    projName = "planar";
+                    croppedPanorama = panoramaCropper(input, panoStore(ii).planar{1});
+                    panoStore(ii).planar{3} = croppedPanorama;
+                elseif isfield(panoStore, "cylindrical")
+                    projName = "cylindrical";
+                    croppedPanorama = panoramaCropper(input, panoStore(ii).cylindrical{1});
+                    panoStore(ii).cylindrical{3} = croppedPanorama;
+                elseif isfield(panoStore, "spherical")
+                    projName = "spherical";
+                    croppedPanorama = panoramaCropper(input, panoStore(ii).spherical{1});
+                    panoStore(ii).spherical{3} = croppedPanorama;
+                elseif isfield(panoStore, "equirectangular")
+                    projName = "equirectangular";
+                    croppedPanorama = panoramaCropper(input, panoStore(ii).equirectangular{1});
+                    panoStore(ii).equirectangular{3} = croppedPanorama;
+                elseif isfield(panoStore, "stereographic")
+                    projName = "stereographic";
+                    croppedPanorama = panoramaCropper(input, panoStore(ii).stereographic{1});
+                    panoStore(ii).stereographic{3} = croppedPanorama;
+                end
+
+                fprintf('Cropped %s panorama in : %f seconds\n', projName, toc);
+            end
+
         end
-        
+
         % Image write
         if input.imageWrite
-            imwrite(allPanoramas{ii,1}, [ 'planar' '_' input.transformationType '_' ...
-            num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
-            
-            imwrite(allPanoramas{ii,2}, [ 'cylindrical' '_' input.transformationType '_' ...
-            num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
-            
-            imwrite(allPanoramas{ii,3}, [ 'spherical' '_' input.transformationType '_' ...
-            num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
+            % RGB panorama writer
+            if isfield(panoStore, "planar")
+                imwrite(panoStore(ii).planar{1}, ['planar' '_' input.transformationType '_' ...
+                                                      num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
+            elseif isfield(panoStore, "cylindrical")
+                imwrite(panoStore(ii).cylindrical{1}, ['cylindrical' '_' input.transformationType '_' ...
+                                                           num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
+            elseif isfield(panoStore, "spherical")
+                imwrite(panoStore(ii).spherical{1}, ['spherical' '_' input.transformationType '_' ...
+                                                         num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
+            elseif isfield(panoStore, "equirectangular")
+                imwrite(panoStore(ii).equirectangular{1}, ['equirectangular' '_' input.transformationType '_' ...
+                                                               num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
+            elseif isfield(panoStore, "stereographic")
+                imwrite(panoStore(ii).stereographic{1}, ['stereographic' '_' input.transformationType '_' ...
+                                                             num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
+            end
 
-            imwrite(allPanoramas{ii,4}, [ 'equirectangular' '_' input.transformationType '_' ...
-            num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
-
-            imwrite(allPanoramas{ii,5}, [ 'stereographic' '_' input.transformationType '_' ...
-            num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
-            
             %-------------------------------------------------------------------------------
             if input.cropPanorama == 1
-                imwrite(croppedPanoramas{ii,1}, [ 'planar_cropped' '_' input.transformationType '_' ...
-                num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
-                
-                imwrite(croppedPanoramas{ii,2}, [ 'cylindrical_cropped' '_' input.transformationType '_' ...
-                num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
-                
-                imwrite(croppedPanoramas{ii,3}, [ 'spherical_cropped' '_' input.transformationType '_' ...
-                num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
+                % RGB cropped panorama writer
+                if isfield(panoStore, "planar")
+                    imwrite(panoStore(ii).planar{3}, ['planar_cropped' '_' input.transformationType '_' ...
+                                                          num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
+                elseif isfield(panoStore, "cylindrical")
+                    imwrite(panoStore(ii).cylindrical{3}, ['cylindrical_cropped' '_' input.transformationType '_' ...
+                                                               num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
+                elseif isfield(panoStore, "spherical")
+                    imwrite(panoStore(ii).spherical{3}, ['spherical_cropped' '_' input.transformationType '_' ...
+                                                             num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
+                elseif isfield(panoStore, "equirectangular")
+                    imwrite(panoStore(ii).equirectangular{3}, ['equirectangular_cropped' '_' input.transformationType '_' ...
+                                                                   num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
+                elseif isfield(panoStore, "stereographic")
+                    imwrite(panoStore(ii).stereographic{3}, ['stereographic_cropped' '_' input.transformationType '_' ...
+                                                                 num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
+                end
 
-                imwrite(croppedPanoramas{ii,4}, [ 'equirectangular_cropped' '_' input.transformationType '_' ...
-                num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
-                
-                imwrite(croppedPanoramas{ii,5}, [ 'stereographic_cropped' '_' input.transformationType '_' ...
-                num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
             end
 
             %-------------------------------------------------------------------------------
-            if ~isempty(annotatedPanoramas{ii,1})
-                imwrite(annotatedPanoramas{ii,1}, [ 'planar_annotated' '_' input.transformationType '_' ...
-                num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
-                
-                imwrite(annotatedPanoramas{ii,2}, [ 'cylindrical_annotated' '_' input.transformationType '_' ...
-                num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
-                
-                imwrite(annotatedPanoramas{ii,3}, [ 'spherical_annotated' '_' input.transformationType '_' ...
-                num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
+            if input.showPanoramaImgsNums && input.showCropBoundingBox
+                % RGB annotations writer
+                if isfield(panoStore, "planar") && ~isempty(panoStore(ii).planar{2})
+                    imwrite(panoStore(ii).planar{2}, ['planar_annotated' '_' input.transformationType '_' ...
+                                                          num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
+                elseif isfield(panoStore, "cylindrical") && ~isempty(panoStore(ii).cylindrical{2})
+                    imwrite(panoStore(ii).cylindrical{2}, ['cylindrical_annotated' '_' input.transformationType '_' ...
+                                                               num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
+                elseif isfield(panoStore, "spherical") && ~isempty(panoStore(ii).spherical{2})
+                    imwrite(panoStore(ii).spherical{2}, ['spherical_annotated' '_' input.transformationType '_' ...
+                                                             num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
+                elseif isfield(panoStore, "equirectangular") && ~isempty(panoStore(ii).equirectangular{2})
+                    imwrite(panoStore(ii).equirectangular{2}, ['equirectangular_annotated' '_' input.transformationType '_' ...
+                                                                   num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
+                elseif isfield(panoStore, "stereographic") && ~isempty(panoStore(ii).stereographic{2})
+                    imwrite(panoStore(ii).stereographic{2}, ['stereographic_annotated' '_' input.transformationType '_' ...
+                                                                 num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
+                end
 
-                imwrite(annotatedPanoramas{ii,4}, [ 'equirectangular_annotated' '_' input.transformationType '_' ...
-                num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
-                
-                imwrite(annotatedPanoramas{ii,5}, [ 'stereographic_annotated' '_' input.transformationType '_' ...
-                num2str(myImg) '_' num2str(ii) '_' char(datasetName{myImg}) '.png'])
             end
+
         end
+
     end
+
 end
