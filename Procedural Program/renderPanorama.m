@@ -1,4 +1,4 @@
-function [panorama, rgbAnnotation] = renderPanorama(images, cameras, mode, ref_idx, opts)
+function [panorama, rgbAnnotation] = renderPanorama(images, imgSize, cameras, mode, ref_idx, opts)
     % RENDERPANORAMA Render a panorama in the chosen projection with optional blending.
     %   [panorama, rgbAnnotation] = renderPanorama(images, cameras, mode, ref_idx, opts)
     %   composes the set of input images onto a common panorama surface using the
@@ -7,6 +7,7 @@ function [panorama, rgbAnnotation] = renderPanorama(images, cameras, mode, ref_i
     %
     %   Inputs
     %   - images  : 1xN or Nx1 cell array of RGB images (uint8 or single).
+    %   - imgSize : 1xN or Nx1 array of [height, width, channels] for each image.
     %   - cameras : 1xN or Nx1 struct array with fields R (3x3 world->cam) and K (3x3).
     %   - mode    : 'cylindrical' | 'spherical' | 'equirectangular' | 'planar' |
     %               'perspective' | 'stereographic'.
@@ -29,6 +30,7 @@ function [panorama, rgbAnnotation] = renderPanorama(images, cameras, mode, ref_i
 
     arguments
         images cell
+        imgSize (:, 3) {mustBeNumeric, mustBeFinite, mustBePositive}
         cameras struct
         mode {mustBeTextScalar}
         ref_idx (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
@@ -36,40 +38,38 @@ function [panorama, rgbAnnotation] = renderPanorama(images, cameras, mode, ref_i
     end
 
     if nargin < 5, opts = struct(); end
-    if ~isfield(opts, 'f_pan'), opts.f_pan = cameras(ref_idx).K(1, 1); end
-    if ~isfield(opts, 'res_scale'), opts.res_scale = 1.0; end
-    if ~isfield(opts, 'angle_power'), opts.angle_power = 1; end
-    if ~isfield(opts, 'crop_border'), opts.crop_border = true; end
-    if ~isfield(opts, 'margin'), opts.margin = 0.05; end
-    if ~isfield(opts, 'use_gpu'), opts.use_gpu = true; end
-    if ~isfield(opts, 'parfor'), opts.parfor = true; end
+    if ~isfield(opts, 'f_pan'), opts.f_pan = cameras(ref_idx).K(1, 1); end % Seed focal length
+    if ~isfield(opts, 'res_scale'), opts.res_scale = 1.0; end % Resolution scale factor
+    if ~isfield(opts, 'angle_power'), opts.angle_power = 1; end % View-angle weight power
+    if ~isfield(opts, 'crop_border'), opts.crop_border = true; end % Crop black border
+    if ~isfield(opts, 'margin'), opts.margin = 0.05; end % Margin fraction on bounds
+    if ~isfield(opts, 'use_gpu'), opts.use_gpu = true; end % Use GPU if available
+    if ~isfield(opts, 'parfor'), opts.parfor = true; end % Use parfor for tiling
     if ~isfield(opts, 'tile'), opts.tile = []; end % [tileH tileW] or []
     if ~isfield(opts, 'max_megapix'), opts.max_megapix = 50; end % cap total pixels (e.g., 50 MP)
     if ~isfield(opts, 'robust_pct'), opts.robust_pct = [1 99]; end % percentile clip for planar bounds
     if ~isfield(opts, 'uv_abs_cap'), opts.uv_abs_cap = 8.0; end % |u|,|v| max in plane units (≈ FOV clamp)
     if ~isfield(opts, 'pix_pad'), opts.pix_pad = 24; end % extra border in **pixels** on panorama plane
-    if ~isfield(opts, 'auto_ref'), opts.auto_ref = true; end
+    if ~isfield(opts, 'auto_ref'), opts.auto_ref = true; end % auto-pick best planar ref_idx
     if ~isfield(opts, 'canvas_color'), opts.canvas_color = 'black'; end % 'black' | 'white'
-    if ~isfield(opts, 'gain_compensation'), opts.gain_compensation = true; end
-    if ~isfield(opts, 'sigma_N'), opts.sigma_N = 10.0; end
-    if ~isfield(opts, 'sigma_g'), opts.sigma_g = 0.1; end
+    if ~isfield(opts, 'gain_compensation'), opts.gain_compensation = true; end % Gain compensation on/off
+    if ~isfield(opts, 'sigma_N'), opts.sigma_N = 10.0; end % Noise stddev for gain comp.
+    if ~isfield(opts, 'sigma_g'), opts.sigma_g = 0.1; end % Gain stddev for gain comp.
     if ~isfield(opts, 'blending'), opts.blending = 'multiband'; end % 'none' | 'linear' | 'multiband'
     if ~isfield(opts, 'overlap_stride'), opts.overlap_stride = 4; end % stride on panorama grid for overlap sampling
     if ~isfield(opts, 'pyr_levels'), opts.pyr_levels = 3; end % for multiband
-    if ~isfield(opts, 'compose_none_policy'), opts.compose_none_policy = 'last'; end
+    if ~isfield(opts, 'compose_none_policy'), opts.compose_none_policy = 'last'; end % pixel overwrite policy:
     % 'last' | 'first' | 'maxangle'
     % "last" (default): later images overwrite earlier ones (matches your old code order-dependent paste).
     % "first": first valid source wins; later images don't overwrite filled pixels.
     % "maxangle": pick the single camera with the largest view-angle weight (still no blending; weight only decides which source wins).
-    if ~isfield(opts, 'showPanoramaImgsNums'), opts.showPanoramaImgsNums = false; end
-    if ~isfield(opts, 'showCropBoundingBox'), opts.showCropBoundingBox = false; end
+    if ~isfield(opts, 'showPanoramaImgsNums'), opts.showPanoramaImgsNums = false; end % show image nums on pano
+    if ~isfield(opts, 'showCropBoundingBox'), opts.showCropBoundingBox = false; end % show crop box on pano
     if ~isfield(opts, 'blend_device'), opts.blend_device = 'auto'; end % 'gpu' | 'cpu' | 'auto'
     if ~isfield(opts, 'tile_min'), opts.tile_min = [512 768]; end % lower bound for tiling
     if ~isfield(opts, 'gpu_mem_frac'), opts.gpu_mem_frac = 0.5; end % keep peak <55 % free mem
 
     N = numel(images);
-    imgSize = zeros(N, 2);
-    for i = 1:N, imgSize(i, :) = [size(images{i}, 1), size(images{i}, 2)]; end
 
     % ---- Auto-pick best planar ref_idx by minimizing canvas area ----
     if (strcmpi(mode, 'planar') || strcmpi(mode, 'perspective')) && opts.auto_ref
@@ -203,6 +203,45 @@ function [panorama, rgbAnnotation] = renderPanorama(images, cameras, mode, ref_i
             error('mode must be cylindrical, spherical, or planar/perspective');
     end
 
+
+    % Choose device
+    onGPU = opts.use_gpu && (gpuDeviceCount > 0);
+
+    % Check for panorama size and if the projection is strange    
+    panorama = [];
+    rgbAnnotation = [];
+
+    % --- Estimate bytes we need ---
+    % main float panorama (single) + logical covered + a working tile buffer margin
+    bytes_pano = double(H) * double(W) * 3 * 4; % single RGB
+    bytes_cover = double(H) * double(W) * 1; % logical ~1 byte
+    bytes_margin = 128e6; % small slack (tune as you like)
+    bytes_needed = bytes_pano + bytes_cover + bytes_margin;
+
+    % --- Allocate only after we know it fits ---
+    try
+        panorama = zeros(H, W, 3, 'single'); % ~12 bytes per pixel
+        covered = false(H, W); % ~1 byte per pixel
+
+        if onGPU
+            panorama = gpuArray(panorama);
+            covered = gpuArray(covered);
+        end
+
+    catch ME
+        warning('renderPanorama:Alloc', ...
+            'Skipping panorama (allocation failed): %s', ME.message);
+        panorama = [];
+        return
+    end
+
+    if ~canFit(bytes_needed, onGPU)
+        warning('renderPanorama:TooLarge', ...
+            ['Skipping panorama: %dx%d requires ~%.2f GB; not enough %s memory.'], ...
+            H, W, bytes_needed / 1e9, tern(onGPU, 'GPU', 'CPU'));
+        return
+    end
+
     % ---------- Simple auto-tiler (mode-aware, streaming-safe) ----------
     if isempty(opts.tile)
         N = numel(images);
@@ -267,20 +306,16 @@ function [panorama, rgbAnnotation] = renderPanorama(images, cameras, mode, ref_i
         gains = ones(N, 3, 'single');
     end
 
-    % Choose device
-    onGPU = opts.use_gpu && (gpuDeviceCount > 0);
+    % Get signm and tile sizes
     if ~isfield(opts, 'pyr_sigma'), opts.pyr_sigma = 1.0; end
     tileH = opts.tile(1); tileW = opts.tile(2);
-
-    % outputs
-    panorama = zeros(H, W, 3, 'single'); if onGPU, panorama = gpuArray(panorama); end
-    covered = false(H, W); if onGPU, covered = gpuArray(covered); end
 
     % === ACCUMULATION & BLENDING (STREAMING, TILE-FIRST) =======================
     tic;
     % ---------------------- TILE LOOP (streaming) ------------------------------
     % You can parallelize **over tiles** (not over images) if you want:
     % parfor r = 1:tileH:H
+
     for r = 1:tileH:H
         rr = r:min(r + tileH - 1, H);
 
@@ -494,14 +529,17 @@ function [F_tile, Wsum_tile] = fuse_tile(rr, cc, DWt, images, cameras, onGPU, sr
 
         case 'linear'
             ht = numel(rr); wt = numel(cc);
-            % accum_tile = zeros(ht, wt, 3, 'single');
-            % wsum_tile  = zeros(ht, wt, 1, 'single');
+            ht = numel(rr); wt = numel(cc);
+
             if onGPU
                 accum_tile = gpuArray.zeros(ht, wt, 3, 'single');
                 wsum_tile = gpuArray.zeros(ht, wt, 1, 'single');
+            else
+                accum_tile = zeros(ht, wt, 3, 'single');
+                wsum_tile = zeros(ht, wt, 1, 'single');
             end
 
-            any_valid = false(ht, wt); % << NEW
+            any_valid = false(ht, wt);
             bestW = zeros(ht, wt, 'single');
             bestRGB = zeros(ht, wt, 3, 'single');
 
@@ -663,18 +701,19 @@ function [S_vec, M_vec, Wang_vec, Wf_vec] = sample_one( ...
     dirc = DWt * R.'; % [T x 3] in *camera* frame
     cx_w = dirc(:, 1); cy_w = dirc(:, 2); cz_w = dirc(:, 3);
 
-    front = cz_w > 1e-6; % visibility (don't multiply into M yet)
+    epsZ = single(1e-6);
+    front = cz_w > epsZ;
+    cz = max(cz_w, epsZ);
 
-    cz = max(cz_w, 1e-6);
     u = fx * (cx_w ./ cz) + cx;
     v = fy * (cy_w ./ cz) + cy;
 
     % View-angle weight (cosine falloff)
     % For w2c R, camera +Z in WORLD coords is fw_world = R' * [0;0;1] = (R(3,:)).'
     % ---- in sample_one() BEFORE computing Wang_vec ----
-    fw = R(:, 3); % use column 3 for the weight
-    Wang_vec = max(0, DWt * fw) .^ single(angle_pow);
-    Wang_vec = Wang_vec .* single(front);
+    fw = R(3, :).'; % camera forward in WORLD coords
+    Wang_vec = max(0, DWt * fw) .^ single(angle_pow); % [T x 1]
+    Wang_vec = Wang_vec .* single(front); % zero out back-facing
 
     % Samples
     S_vec = fast_sample_block(Ic, u, v, ht, wt, onGPU); % [T x 3]
@@ -745,9 +784,6 @@ function [xPoly, yPoly, centroid] = warped_box_in_pano(imageSize, cam, mode, ...
         ph0
         f_pan (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
     end
-
-    %#ok<*NASGU> % Silence potential unused-arg warnings for validated inputs
-    opts = opts; % touch to satisfy linter if not used in all modes
 
     Hc = imageSize(1); Wc = imageSize(2);
     corners = [1, 1; 1, Wc; Hc, Wc; Hc, 1]; % [row, col]
@@ -825,6 +861,58 @@ function srcW = warpWeights(images, N)
         wy(1:ceil(h / 2)) = linspace(0, 1, ceil(h / 2));
         wy(floor(h / 2) + 1:h) = linspace(1, 0, h - floor(h / 2));
         srcW{i} = wy * wx; % [h x w], single
+    end
+
+end
+
+function tf = canFit(bytes_needed, onGPU)
+    % CANFIT Quick check for available CPU/GPU memory.
+    % tf = canFit(bytes_needed, onGPU)
+    % - bytes_needed: required bytes.
+    % - onGPU: true=GPU, false=CPU (default false).
+    % Returns true if allocation is likely to fit (best-effort).
+    if onGPU
+
+        try
+            g = gpuDevice;
+            % leave a safety headroom (50%)
+            tf = bytes_needed < 0.5 * double(g.AvailableMemory);
+        catch
+            tf = false; % no GPU available / error
+        end
+
+    else
+        % CPU side: use MaxPossibleArrayBytes as a proxy; keep a headroom
+        try
+            m = memory; % Windows/desktop MATLAB only
+            tf = bytes_needed < 0.5 * double(m.MaxPossibleArrayBytes);
+        catch
+            % Fallback if 'memory' unsupported (e.g., Linux w/o swap info):
+            % be conservative (require < 2 GB).
+            tf = bytes_needed < 2e9;
+        end
+
+    end
+
+end
+
+function s = tern(cond, a, b)
+    % TERN Ternary-like conditional selection.
+    % s = tern(cond, a, b)
+    % - cond: logical scalar or array. If true selects from a; otherwise from b.
+    % - a: value(s) returned where cond is true. Must be size-compatible with cond/b.
+    % - b: value(s) returned where cond is false. Must be size-compatible with cond/a.
+    % Returns s: selected value(s); size and type follow standard MATLAB assignment rules.
+    % Notes:
+    % - If cond is a scalar, returns a when cond is true, otherwise b.
+    % - If cond is an array, selection is element-wise; scalars in a or b are expanded as needed.
+    % Examples:
+    % - s = tern(true, 1, 2)              % returns 1
+    % - s = tern([true false], 10, [1 2]) % returns [10 2]
+    if cond
+        s = a;
+    else
+        s = b;
     end
 
 end
@@ -933,7 +1021,7 @@ function [th_min, th_max, h_min, h_max] = cylindrical_bounds(cams, imgSize)
 
     arguments
         cams struct
-        imgSize (:, 2) {mustBeNumeric}
+        imgSize (:, 3) {mustBeNumeric}
     end
 
     th_min = inf; th_max = -inf; h_min = inf; h_max = -inf;
@@ -962,7 +1050,7 @@ function [th_min, th_max, ph_min, ph_max] = spherical_bounds(cams, imgSize)
 
     arguments
         cams struct
-        imgSize (:, 2) {mustBeNumeric}
+        imgSize (:, 3) {mustBeNumeric}
     end
 
     th_min = inf; th_max = -inf; ph_min = inf; ph_max = -inf;
@@ -992,7 +1080,7 @@ function [u_min, u_max, v_min, v_max] = planar_bounds( ...
 
     arguments
         cams struct
-        imgSize (:, 2) {mustBeNumeric}
+        imgSize (:, 3) {mustBeNumeric}
         Rref (3, 3) {mustBeNumeric, mustBeFinite}
         robust_pct (1, 2) {mustBeNumeric}
         uv_abs_cap (1, 1) {mustBeNumeric}
@@ -1067,7 +1155,7 @@ function [a_min, a_max, b_min, b_max] = stereographic_bounds( ...
 
     arguments
         cams struct
-        imgSize (:, 2) {mustBeNumeric}
+        imgSize (:, 3) {mustBeNumeric}
         Rref (3, 3) {mustBeNumeric, mustBeFinite}
         robust_pct (1, 2) {mustBeNumeric}
         abs_cap (1, 1) {mustBeNumeric}

@@ -4,6 +4,7 @@
 # Ignore node_modules folder
 node_modules
 /Archive
+/Logs
 gainCompensation_v1.m
 
 # Ignore all files

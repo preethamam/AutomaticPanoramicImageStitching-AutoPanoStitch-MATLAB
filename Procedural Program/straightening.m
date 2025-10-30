@@ -37,11 +37,16 @@ function straightenedTforms = straightening(ccbundlerTforms)
 
     % Validate cell shape and contents
     if ~(isvector(ccbundlerTforms) && ~isempty(ccbundlerTforms))
-        error('straightening:InvalidInput', 'ccbundlerTforms must be a nonempty vector cell array.');
+        try 
+            error('straightening:InvalidInput', 'ccbundlerTforms must be a nonempty vector cell array.');
+        catch
+            straightenedTforms = [];
+            return
+        end
     end
 
     for cc = 1:numel(ccbundlerTforms)
-        
+
         % Check for empty camera
         if isempty(ccbundlerTforms{cc}), continue, end
 
@@ -66,7 +71,7 @@ function straightenedTforms = straightening(ccbundlerTforms)
     straightenedTforms = cell(1, numel(ccbundlerTforms));
 
     parfor cc = 1:numel(ccbundlerTforms)
-        
+
         if isempty(ccbundlerTforms{cc}), continue, end
 
         cams = ccbundlerTforms{cc};
@@ -76,6 +81,19 @@ function straightenedTforms = straightening(ccbundlerTforms)
         C = X * X.'; % sum_i X_i X_i^T
         [~, ~, V] = svd(C);
         up = V(:, end); % "up" direction (smallest singular)
+
+        % FIX: Check if "up" is actually pointing down, and flip if necessary
+        % Robust heuristic: "up" should be opposite to the average camera Y-axis
+        % (camera Y-axis points down in the image, so world "up" should be opposite)
+        Y_axes = cell2mat(arrayfun(@(c) c.R(2, 1:3)', cams, 'UniformOutput', false));
+        avg_Y = mean(Y_axes, 2);
+        avg_Y = avg_Y / norm(avg_Y);
+
+        if dot(up, avg_Y) > 0
+            % "up" is pointing in same direction as downward camera Y-axes, so flip it
+            up = -up;
+            fprintf('  Straightening component %d: flipped "up" direction\n', cc);
+        end
 
         % Average Z (world)
         Zsum = sum(cell2mat(arrayfun(@(c) c.R(3, :)', cams, 'UniformOutput', false)), 2);
@@ -108,7 +126,7 @@ function straightenedTforms = straightening(ccbundlerTforms)
                 % World basis whose Y is "up"
                 B = [xhat, up, zhat];
                 % Global rotation that maps this basis to canonical axes
-                S = B.'; % transpose is the rotation we want
+                S = B; % transpose is the rotation we want
             end
 
         end

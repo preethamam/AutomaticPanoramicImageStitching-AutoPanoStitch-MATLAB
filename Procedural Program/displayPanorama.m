@@ -1,5 +1,5 @@
 function panoStore = displayPanorama(input, finalPanoramaTforms, ...
-        finalrefIdxs, imagesAll, panoIndices)
+        finalrefIdxs, imagesAll, imageSizesAll, panoIndices)
     %DISPLAYPANORAMA Render panoramas for selected projections and optionally display them.
     %
     % Syntax
@@ -25,6 +25,7 @@ function panoStore = displayPanorama(input, finalPanoramaTforms, ...
     %                         and the required pose/transform data for rendering.
     %   finalrefIdxs        - C-by-1 numeric array with the reference image index for each component.
     %   imagesAll           - N-by-1 cell array of source images.
+    %   imageSizesAll       - N-by-3 numeric array of image sizes [height, width, channels].
     %   panoIndices         - C-by-1 cell array; panoIndices{i} lists the absolute image indices
     %                         belonging to component i.
     %
@@ -50,6 +51,7 @@ function panoStore = displayPanorama(input, finalPanoramaTforms, ...
         finalPanoramaTforms cell
         finalrefIdxs (:, 1) double {mustBeInteger, mustBeInteger}
         imagesAll cell
+        imageSizesAll (:, 3) double {mustBeNumeric, mustBeFinite, mustBePositive}
         panoIndices cell
     end
 
@@ -91,7 +93,9 @@ function panoStore = displayPanorama(input, finalPanoramaTforms, ...
         close all;
         cameras = finalPanoramaTforms{ii};
         refIdx = finalrefIdxs(ii);
-
+        images = imagesAll(panoIndices{ii});
+        imageSizes = imageSizesAll(panoIndices{ii}, :);
+        
         % Example call after your BA
         opts = struct('f_pan', cameras(refIdx).K(1, 1), 'res_scale', 1.0, ...
             'angle_power', 2, 'crop_border', true, ...
@@ -108,7 +112,14 @@ function panoStore = displayPanorama(input, finalPanoramaTforms, ...
         % Render all projections panorama
         for jj = 1:numel(input.panorama2DisplaynSave)
             projection = input.panorama2DisplaynSave(jj);
-            [panorama, annoRGB] = renderPanorama(imagesAll(panoIndices{ii}), cameras, projection, refIdx, opts);
+            [panorama, annoRGB] = renderPanorama(images, imageSizes, cameras, projection, refIdx, opts);
+            
+            if isempty(panorama)
+                warning('displayPanorama:Skipped', ...
+                    'Panorama skipped due to insufficient memory for %s frame.', projection);
+                % continue / move on to next CC
+                return
+            end
 
             % Store panoramas
             if strcmp(projection, "planar")
@@ -163,7 +174,7 @@ function panoStore = displayPanorama(input, finalPanoramaTforms, ...
         end
 
         % Pause to visuzalize the panorama
-        pause(5)
+        pause(1)
 
     end
 

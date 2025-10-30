@@ -21,7 +21,7 @@
 clear; close all; clc;
 clcwaitbarz = findall(0, 'type', 'figure', 'tag', 'TMWWaitbar');
 delete(clcwaitbarz);
-warning('off', 'all');
+warning('on', 'all');
 
 %% Get inputs
 %--------------------------------------------------------------------------
@@ -61,7 +61,7 @@ foldersLen = length(datasetName);
 %--------------------------------------------------------------------------
 % Stitches panoramas
 %--------------------------------------------------------------------------
-for myImg = 20:foldersLen
+for myImg = 39:foldersLen
     stitchStart = tic;
     fprintf('Image number: %i | Current folder: %s\n', myImg, imgFolders(myImg).name);
 
@@ -76,27 +76,24 @@ for myImg = 20:foldersLen
     fprintf('Matched features: %f seconds\n', toc(featureMatchtic));
 
     %% Find matches
-    imageMatchtic = tic;
+    imageMatchtic = tic;    
     [allMatches, numMatches, initialTforms] = imageMatching(input, numImg, keypoints, matches, images);
-    fprintf('Matched images: %f seconds\n', toc(imageMatchtic));
-    
-    % Image matches check
-    if sum(sum(numMatches)) == 0, fprintf('No images matched.\n'), continue; end
+    fprintf('Matched images: %f seconds\n', toc(imageMatchtic));       
 
     %% Recognize panoramas and perform bundle adjustment
     recPanosnBAtic = tic;
     [bundlerTforms, finalrefIdxs, panoIndices, concomps, panaromaCCs, connCompsNumber] = recognizePanoramas(input, ...
                 numMatches, matches, keypoints, imageSizes, initialTforms);
-    fprintf('Recognized panoramas: %f seconds\n', toc(recPanosnBAtic));
+    fprintf('Recognized panoramas and performed bundle adjustment: %f seconds\n', toc(recPanosnBAtic));    
 
     %% Automatic panorama straightening
     straightentic = tic;
-    finalPanoramaTforms = straightening(bundlerTforms);
+    finalPanoramaTforms = straightening(bundlerTforms);    
     fprintf('Automatic panorama straightening: %f seconds\n', toc(straightentic));
 
     %% Render and display panoramas
     rendertic = tic;
-    panoStoreRGBAnno = displayPanorama(input, finalPanoramaTforms, finalrefIdxs, images, panoIndices);
+    panoStoreRGBAnno = displayPanorama(input, finalPanoramaTforms, finalrefIdxs, images, imageSizes, panoIndices);
     fprintf('Rendering and display time: %f seconds\n', toc(rendertic));
 
     %% Crop and save panoramas

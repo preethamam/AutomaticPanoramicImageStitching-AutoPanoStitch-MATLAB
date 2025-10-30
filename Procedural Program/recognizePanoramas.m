@@ -1,5 +1,5 @@
 function [bundlerTformsAll, finalrefIdxsAll, panoIndices, concomps, panaromaCCs, connCompsNumber] = recognizePanoramas(input, ...
-        numMatches, matchesAll, keypointsAll, imageSizesAll, initialTformsAll)
+        numMatchesAll, matchesAll, keypointsAll, imageSizesAll, initialTformsAll)
     %RECOGNIZEPANORAMAS Identify panorama groups and refine transforms by bundle adjustment.
     %
     % Syntax
@@ -51,7 +51,7 @@ function [bundlerTformsAll, finalrefIdxsAll, panoIndices, concomps, panaromaCCs,
 
     arguments
         input (1, 1) struct
-        numMatches (:, :) {mustBeNumeric, mustBeFinite, mustBeNonnegative}
+        numMatchesAll (:, :) {mustBeNumeric, mustBeFinite, mustBeNonnegative}
         matchesAll (:, :) cell
         keypointsAll cell
         imageSizesAll (:, 3) {mustBeNumeric, mustBeFinite, mustBeNonnegative}
@@ -59,9 +59,14 @@ function [bundlerTformsAll, finalrefIdxsAll, panoIndices, concomps, panaromaCCs,
     end
 
     % Cross-array consistency checks
-    N = size(numMatches, 1);
+    N = size(numMatchesAll, 1);
 
-    if size(numMatches, 2) ~= N
+    % Image matches check
+    if sum(sum(numMatchesAll)) == 0
+        warning('No images matched.\n')
+    end
+
+    if size(numMatchesAll, 2) ~= N
         error('recognizePanoramas:SquareMatches', 'numMatches must be a square N-by-N matrix.');
     end
 
@@ -107,7 +112,7 @@ function [bundlerTformsAll, finalrefIdxsAll, panoIndices, concomps, panaromaCCs,
     end
 
     % Find connected components of image matches
-    numMatchesG = graph(numMatches, 'upper');
+    numMatchesG = graph(numMatchesAll, 'upper');
     [concomps, ccBinSizes] = conncomp(numMatchesG);
     panaromaCCsAll = find(ccBinSizes >= 1);
     panaromaCCs = find(ccBinSizes > 1);
@@ -121,9 +126,17 @@ function [bundlerTformsAll, finalrefIdxsAll, panoIndices, concomps, panaromaCCs,
     for i = 1:connCompsNumber
         idxs = find(concomps == i);
 
+        % Get panorama matches
+        numMatches = numMatchesAll(idxs, idxs);
+
+        % Panorama image matches check
+        if sum(sum(numMatches)) == 0
+            warning('No panorama images matched')
+        end
+
         if isscalar(idxs)
             % Skip bundle adjustment for single-image panorama
-            fprintf('Skipping bundle adjustment as only one image found.\n');
+            warning('Skipping bundle adjustment as only one image found');
             continue;
         end
 
@@ -135,11 +148,11 @@ function [bundlerTformsAll, finalrefIdxsAll, panoIndices, concomps, panaromaCCs,
         keypoints = keypointsAll(idxs);
         imageSizes = imageSizesAll(idxs, :);
         matches = matchesAll(idxs, idxs);
-        initialTforms = initialTformsAll(idxs, idxs);
+        initialTforms = initialTformsAll(idxs, idxs);        
 
         % Perform bundle adjustment
         BAtic = tic;
-        [bundlerTforms, finalrefIdxs] = bundleAdjustmentLM(input, matches, keypoints, ...
+        [bundlerTforms, finalrefIdxs] = bundleAdjustmentLM(input, numMatches, matches, keypoints, ...
             imageSizes, initialTforms, ...
             'MaxLMIters', input.maxIterLM, 'Lambda0', input.lambda, ...
             'SigmaHuber', input.sigmaHuber, 'Verbose', input.verboseLM);

@@ -18,7 +18,7 @@ end
 
 % Folder name that consists of the images set
 folderName = '';
-input.imageSaveFolder = 'E:\AutoPanoStitch';
+input.imageSaveFolder = 'F:\Datasets\AutoPanoStitch';
 
 %% Inputs 2
 %--------------------------------------------------------------------------
@@ -54,12 +54,12 @@ input.ApproxProbes = 8;
 
 % Image matching (RANSAC/MLESAC)            MLESAC - recommended
 input.useMATLABImageMatching = 0; % Use MATLAB default estgeotform2d function: 0-off | 1-on
-input.imageMatchingMethod = 'ransac'; % 'ransac' | 'mlesac'. RANSAC or MLESAC. Both gives consistent matches.
+input.imageMatchingMethod = 'mlesac'; % 'ransac' | 'mlesac'. RANSAC or MLESAC. Both gives consistent matches.
 % MLESAC - recommended. As it has some tight bounds and validation checks.
 
 % RANSAC execution time for projective case is ~1.35 times higher than MLESAC.
-input.maxIter = 500; % RANSAC/MLESAC maximum iterations
-input.maxDistance = 2.5; % Maximum distance (pixels) increase this to get more matches. Default: 1.5
+input.maxIter = 2500; % RANSAC/MLESAC maximum iterations
+input.maxDistance = 1.5; % Maximum distance (pixels) increase this to get more matches. Default: 1.5
 % For large image RANSAC/MLESAC requires maxDistance 1-3 pixels
 % more than the default value of 1.5 pixels.
 input.inliersConfidence = 99.9; % Inlier confidence [0, 100]
@@ -95,7 +95,7 @@ input.MBBsigma = 1; % Multi-band Gaussian sigma
 input.resizeImage = 1; % Resize input images
 input.resizeStitchedImage = 0; % Resize stitched image
 input.panorama2DisplaynSave = ... % "planar" | "cylindrical" | "spherical" | "equirectangular" | "stereographic" | Use:[]
-"spherical"; %["planar", "cylindrical", "spherical", ...
+"cylindrical"; %["planar", "cylindrical", "spherical", ...
                %"equirectangular", "stereographic"];
 
 % Post-processing

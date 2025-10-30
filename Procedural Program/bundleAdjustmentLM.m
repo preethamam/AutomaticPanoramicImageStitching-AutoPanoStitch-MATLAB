@@ -1,78 +1,71 @@
-function [cameras, seed] = bundleAdjustmentLM(input, matches, keypoints, ...
+function [cameras, seed] = bundleAdjustmentLM(input, numMatches, matches, keypoints, ...
         imageSizes, initialTforms, varargin)
-    % BUNDLEADJUSTMENTLM Incremental LM bundle adjustment for panoramic stitching.
+    % BUNDLEADJUSTMENTLM Bundle adjustment for panoramic image stitching
     %   [cameras, seed] = bundleAdjustmentLM(input, matches, keypoints, imageSizes, initialTforms, ...)
-    %   Grows the panorama graph from a seed image and refines per-image rotations
-    %   (R_i) and focal lengths (f_i) using Levenberg–Marquardt with Huber loss.
-    %   The seed image’s rotation is fixed to identity to anchor the gauge.
     %
-    %   Inputs
-    %   - input         : struct with fields controlling initialization and LM
-    %                     (e.g., transformationType, focalEstimateMethod, robust/damping flags).
-    %   - matches       : N-by-N cell; matches{i,j} is M_ij-by-2 [idx_in_keypoints{i}, idx_in_keypoints{j}].
-    %   - keypoints     : 1-by-N (or N-by-1) cell; keypoints{i} = K_i-by-2 [x,y] pixel coordinates.
-    %   - imageSizes    : N-by-2 array [H W] per image.
-    %   - initialTforms : [] | N-by-N cell (projective2d or 3x3 H) | struct array with fields .i,.j,.H (j->i).
+    %   Implements Brown-Lowe incremental bundle adjustment strategy:
+    %   - Cameras added in best-match order (not sequential)
+    %   - Global optimization after each addition
+    %   - Huber robust error function
+    %   - Levenberg-Marquardt solver with priors
     %
-    %   Name-Value options (varargin)
-    %   - 'SigmaHuber'  : Huber threshold (pixels). Default 2.0
-    %   - 'MaxLMIters'  : LM iterations per growth step. Default 30
-    %   - 'Lambda0'     : Initial LM damping. Default 1e-3
-    %   - 'PriorSigmaF' : Focal prior stdev; empty uses mean/median heuristic
-    %   - 'Verbose'     : 0/1. Default 1
-    %   - 'userSeed'    : Optional fixed seed image index. Default: automatic (max degree)
+    %   Inputs:
+    %   - input         : struct with fields:
+    %                     .focalEstimateMethod ('wConstraint', 'shumSzeliski', 'shumSzeliskiOneH')
+    %                     .transformationType (e.g., 'projective')
+    %   - numMatches    : N×N array, numMatches(i,j) = number of matches between i and j
+    %   - matches       : N×N cell array, matches{i,j} = 2×M [indices_in_i; indices_in_j]
+    %   - keypoints     : 1×N cell array, keypoints{i} = K×2 [x,y] or 2×K
+    %   - imageSizes    : N×2 or N×3 array [height, width] per image
+    %   - initialTforms : N×N cell (projective2d or 3×3 H) or struct array with .i,.j,.H
     %
-    %   Outputs
-    %   - cameras: 1-by-N struct array with fields
-    %       R           — 3x3 rotations (world->camera)
-    %       f           — scalar focal length (pixels)
-    %       K           — 3x3 intrinsics [f 0 cx; 0 f cy; 0 0 1]
-    %       initialized — logical flag
-    %   - seed   : index of the seed image used
-
-    arguments
-        input (1, 1) struct
-        matches (:, :) cell
-        keypoints cell
-        imageSizes (:, 3) {mustBeNumeric, mustBeFinite}
-        initialTforms
-    end
-
-    arguments (Repeating)
-        varargin
-    end
-
-    % ------------------ Options ------------------
+    %   Name-Value Parameters:
+    %   - 'SigmaHuber'  : Huber threshold (default: 2.0 pixels)
+    %   - 'MaxLMIters'  : Max LM iterations (default: 50)
+    %   - 'Lambda0'     : Initial LM damping (default: 1e-2)
+    %   - 'PriorSigmaF' : Focal prior std (default: 50 pixels)
+    %   - 'Verbose'     : Verbosity level 0/1/2 (default: 1)
+    %   - 'userSeed'    : Fixed seed image index (default: auto-select)
+    %
+    %   Outputs:
+    %   - cameras : 1×N struct array with fields:
+    %       .R           — 3×3 rotation (world-to-camera convention)
+    %       .f           — scalar focal length (pixels)
+    %       .K           — 3×3 intrinsics [f 0 cx; 0 f cy; 0 0 1]
+    %       .initialized — logical flag
+    %   - seed    : index of seed image
+    %
+    %   References:
+    %   Brown, M. and Lowe, D.G., 2007. Automatic panoramic image stitching 
+    %   using invariant features. International Journal of Computer Vision, 
+    %   74(1), pp.59-73.
+    
+    %% Parse optional parameters
     p = inputParser;
-    p.addParameter('SigmaHuber', 2.0);
-    p.addParameter('MaxLMIters', 30);
-    p.addParameter('Lambda0', 1e-3);
-    p.addParameter('PriorSigmaF', []);
-    p.addParameter('Verbose', 1);
-    p.addParameter('userSeed', []);
-    p.parse(varargin{:});
-    opt = p.Results;
-
-    % Debug input matches
-    [n1, n2] = size(matches);
+    addParameter(p, 'SigmaHuber', 2.0, @(x) x > 0);
+    addParameter(p, 'MaxLMIters', 50, @(x) x > 0);
+    addParameter(p, 'Lambda0', 1e-2, @(x) x > 0);
+    addParameter(p, 'PriorSigmaF', 50, @(x) x > 0);
+    addParameter(p, 'Verbose', 1, @(x) ismember(x, [0,1,2]));
+    addParameter(p, 'userSeed', [], @(x) isempty(x) || (isscalar(x) && x > 0));
+    
+    parse(p, varargin{:});
+    opts = p.Results;    
+    if ~isfield(opts,'OneDirection'), opts.OneDirection = false; end
+    if ~isfield(opts,'MaxMatches'),        opts.MaxMatches        = 300; end  % no cap by default
+    if ~isfield(opts,'SubsampleMode'),     opts.SubsampleMode     = 'random'; end  % 'random'|'grid'|'polar'
+    if ~isfield(opts,'SubsampleGridBins'), opts.SubsampleGridBins = [4 4];   end  % [rows cols]
+    if ~isfield(opts,'SubsamplePolarBins'),opts.SubsamplePolarBins= [12 5];  end  % [nAngles nRadii]
 
     N = numel(keypoints);
-    opt.MaxGrow = N;
-
-    % Verify matches cell array is square
-    assert(n1 == n2, 'Matches cell array must be square (NxN)');
-    num_images = n1;
-
-    % Verify keypoints array size
-    assert(size(keypoints, 2) >= num_images, 'Keypoints array must have entry for each image');
-
+    
     % ------------------ Build pair list (compact) ------------------
     pairs = build_pairs_from_cells(matches, keypoints); % each pair has i,j, Ui (px), Uj (px); i<j
-
+    
     % ------------------ Choose seed (image with max degree / matches) ------------------
     % Optionally override the automatic seed selection
-    if ~isempty(opt.userSeed)
-        seed = opt.userSeed;
+    if ~isempty(opts.userSeed)
+        seed = opts.userSeed;
 
         if ~(isscalar(seed) && isnumeric(seed) && isfinite(seed) && seed >= 1 && seed <= N)
             error('bundleAdjustmentLM:SeedIndex', 'userSeed must be a valid image index in [1..N].');
@@ -90,1650 +83,1169 @@ function [cameras, seed] = bundleAdjustmentLM(input, matches, keypoints, ...
 
         [~, seed] = max(deg);
     end
-
-    % ------------------ Initialize cameras via your function ------------------
-    cameras = initializeCameraMatrices(input, pairs, imageSizes, initialTforms, seed, num_images);
+    
+    % Print camera initialization
+    if opts.Verbose
+        fprintf('\n=== Camera Initialization ===\n');
+        fprintf('Seed image: %d (best connected)\n', seed);
+        fprintf('Using focal estimation method: %s\n', input.focalEstimateMethod);
+    end
+    
+    % Robust camera initialization
+    cameras = initializeCameraMatrices(input, pairs, imageSizes, initialTforms, seed, N); 
+    cameras = prepareCameraCache(cameras, imageSizes);
+    initialized = false(N, 1);
+    initialized(seed) = true;
     cameras(seed).initialized = true;
-
-    if opt.Verbose
-        fprintf('Seed image: %d | initial f≈%.2f px\n', seed, cameras(seed).f);
+    
+    % Brown-Lowe Incremental Bundle Adjustment
+    if opts.Verbose
+        fprintf('\n=== Incremental Bundle Adjustment (Brown-Lowe) ===\n');
+        fprintf('Step 1/%d: Initialized seed camera %d (f=%.1f px)\n', ...
+            N, seed, cameras(seed).f);
     end
-
-    % Internal rotation parameterization (axis-angle per image)
-    theta = zeros(N, 3);
-
-    % Keep R matrices aligned with theta; seed is fixed to identity
-    for i = 1:N
-        if isempty(cameras(i).R), cameras(i).R = eye(3); end
-    end
-
-    cameras(seed).R = eye(3); theta(seed, :) = [0 0 0];
-
-    % ------------------ Incremental growth ------------------
-
-    growSteps = 1;
-
-    while any(~[cameras.initialized]) && growSteps < opt.MaxGrow
-        [nextImg, bestNbr] = pick_next_image([cameras.initialized], pairs, N);
-
-        if isempty(nextImg)
-            if opt.Verbose, fprintf('No more connected images to add.\n'); end
-            break;
+    
+    % Incremental addition in BEST-MATCH order
+    for step = 2:N
+        % Find uninitialized image with strongest connection to initialized set
+        bestScore = 0;
+        bestImage = -1;
+        bestMatchTo = -1;
+        
+        for candidate = 1:N
+            if initialized(candidate)
+                continue
+            end
+            
+            % Sum matches to ALL initialized images
+            for init_img = 1:N
+                if ~initialized(init_img)
+                    continue
+                end
+                
+                score = numMatches(candidate, init_img) + ...
+                        numMatches(init_img, candidate);
+                
+                if score > bestScore
+                    bestScore = score;
+                    bestImage = candidate;
+                    bestMatchTo = init_img;
+                end
+            end
+        end
+        
+        if bestImage == -1
+            if opts.Verbose
+                fprintf('Warning: No more images with matches to add (added %d/%d)\n', ...
+                    step-1, N);
+            end
+            break
+        end
+        
+        % Initialize new camera from best matching initialized camera
+        % Build H (bestImage <- bestMatchTo), column form
+        
+        pair_tmp.i = bestImage; 
+        pair_tmp.j = bestMatchTo;
+        % default to empty so downstream code is safe
+        pair_tmp.Ui = [];
+        pair_tmp.Uj = [];
+        
+        % First try: reuse from compact pairs (only has i<j entries)
+        allijs = [cat(1, pairs.i), cat(1, pairs.j)];
+        idx_from_pairs = find(ismember(allijs, [min(bestImage,bestMatchTo), max(bestImage,bestMatchTo)], 'rows'), 1);
+        
+        if ~isempty(idx_from_pairs)
+            % Pull from pairs; need to ensure Ui/Uj correspond to (i=bestImage, j=bestMatchTo)
+            p = pairs(idx_from_pairs);
+            if p.i == bestImage && p.j == bestMatchTo
+                pair_tmp.Ui = p.Ui;
+                pair_tmp.Uj = p.Uj;
+            elseif p.i == bestMatchTo && p.j == bestImage
+                % swap to keep j->i orientation consistent with pair_tmp (i=bestImage, j=bestMatchTo)
+                pair_tmp.Ui = p.Uj;  % points in bestImage
+                pair_tmp.Uj = p.Ui;  % points in bestMatchTo
+            end
+        end
+        
+        % Second try: build from matches/keypoints cells
+        if isempty(pair_tmp.Ui) || isempty(pair_tmp.Uj)
+            M = matches{bestMatchTo, bestImage};  % columns: [idx_in_bestMatchTo; idx_in_bestImage]
+            flipped = false;
+            if isempty(M)
+                M = matches{bestImage, bestMatchTo};  % columns: [idx_in_bestImage; idx_in_bestMatchTo]
+                flipped = true;
+            end
+            if ~isempty(M)
+                % Extract Kx2 or 2xK agnostic
+                Ui = keypoints{bestImage};
+                Uj = keypoints{bestMatchTo};
+                if size(Ui,1) == 2,  Ui = Ui.';  end   % -> Kx2
+                if size(Uj,1) == 2,  Uj = Uj.';  end
+        
+                if ~flipped
+                    % M = [idx_j; idx_i] w.r.t matches{j,i} convention → here j=bestMatchTo, i=bestImage
+                    pair_tmp.Uj = Uj(M(1,:).', :);  % points in j (bestMatchTo), M rows are indices
+                    pair_tmp.Ui = Ui(M(2,:).', :);  % points in i (bestImage)
+                else
+                    % M = [idx_i; idx_j] w.r.t matches{i,j}
+                    pair_tmp.Ui = Ui(M(1,:).', :);
+                    pair_tmp.Uj = Uj(M(2,:).', :);
+                end
+            end
         end
 
-        % Initialize new image from its best neighbor
-        cameras(nextImg).R = cameras(bestNbr).R;
-        cameras(nextImg).f = cameras(bestNbr).f;
-        cx = imageSizes(nextImg, 2) / 2; cy = imageSizes(nextImg, 1) / 2;
-        cameras(nextImg).K = [cameras(nextImg).f, 0, cx; 0, cameras(nextImg).f, cy; 0, 0, 1];
-        cameras(nextImg).initialized = true;
-        theta(nextImg, :) = theta(bestNbr, :);
-
-        if opt.Verbose
-            fprintf('>> Added image %d (best neighbor %d). Active = %d\n', ...
-                nextImg, bestNbr, nnz([cameras.initialized]));
+        % ---- Accept or ban this pair for this step ----
+        if isempty(pair_tmp.Ui) || size(pair_tmp.Ui,1) < 4 || isempty(pair_tmp.Uj) || size(pair_tmp.Uj,1) < 4
+            if opts.Verbose
+                fprintf('  Skipping %d (no robust matches with %d)\n', bestImage, bestMatchTo);
+            end
+            % Ban just this (bestImage,bestMatchTo) option and try next best
+            localScore(bestImage, bestMatchTo) = -inf;
+            continue;   % stay in while; pick the next best
         end
 
-        % LM over all active (seed rotation hard-fixed)
-        active = find([cameras.initialized]);
-        [theta, cameras] = run_lm(active, theta, cameras, pairs, imageSizes, seed, input, opt);
+        
+        % Get homography matrix
+        Hji = getHomog_j_to_i(input, pair_tmp, imageSizes, initialTforms);
 
-        growSteps = growSteps + 1;
+        % Beast image rotation
+        if ~isempty(Hji)
+            Ki = buildIntrinsicMatrix(cameras(bestImage).f, imageSizes(bestImage,1:2));
+            Kj = buildIntrinsicMatrix(cameras(bestMatchTo).f, imageSizes(bestMatchTo,1:2));
+            Hij = Ki \ Hji * Kj;
+            if all(isfinite(Hij(:)))
+                Rij = projectToSO3(Hij);                     % approx R_i * R_j^T
+                cameras(bestImage).R = Rij * cameras(bestMatchTo).R;
+            else
+                cameras(bestImage).R = cameras(bestMatchTo).R;   % fallback
+            end
+        else
+            cameras(bestImage).R = cameras(bestMatchTo).R;       % fallback
+        end
+
+        
+        % Best image K and f
+        cameras(bestImage).f = cameras(bestMatchTo).f;
+        cameras(bestImage).K = buildIntrinsicMatrix(cameras(bestImage).f, ...
+            imageSizes(bestImage, 1:2));
+        cameras(bestImage).initialized = true;
+        initialized(bestImage) = true;
+        
+        if opts.Verbose
+            fprintf('Step %d/%d: Added camera %d (best match to %d: %d pairs)\n', ...
+                step, N, bestImage, bestMatchTo, bestScore);
+        end
+        
+        % CRITICAL: Global bundle adjustment on ALL initialized cameras
+        initializedList = find(initialized);
+        opts_iter = opts;                % <— add
+        if numel(initializedList) <= 3
+            opts_iter.FinalPass = true;   % use σHuber = opts.SigmaHuber (e.g., 2 px)
+        end
+
+        
+        if opts.Verbose >= 2
+            fprintf('  Running global BA on %d cameras...\n', numel(initializedList));
+        end
+        
+        cameras = runLevenbergMarquardt( ...
+            cameras, initializedList, seed, ...
+            matches, keypoints, imageSizes(:,1:2), opts_iter);
     end
-
-    % ------------------ After all growth + LM steps ------------------
-    rms_stats = check_w2c_sanity(pairs, cameras, imageSizes);
-    fprintf('Final w2c RMS mean = %.3f px\n', rms_stats.mean);
-
-    compare_conventions(pairs, cameras, imageSizes);
-
+    
+    %% Final global bundle adjustment
+    initializedList = find([cameras.initialized]);
+    opts_final = opts;               % <— add
+    opts_final.FinalPass = true;     % <— add
+    
+    if opts.Verbose
+        fprintf('\n=== Final Bundle Adjustment ===\n');
+        fprintf('Running final BA on all %d cameras...\n', numel(initializedList));
+    end
+    
+    if numel(initializedList) > 1
+        % Run multiple passes for long chains
+        nPasses = min(2, ceil(numel(initializedList) / 10));
+        for pass = 1:nPasses
+            if nPasses > 1 && opts.Verbose
+                fprintf('Pass %d/%d:\n', pass, nPasses);
+            end
+           cameras = runLevenbergMarquardt( ...
+                    cameras, initializedList, seed, ...
+                    matches, keypoints, imageSizes(:,1:2), opts_iter);
+        end
+    end
+    
+    %% Report final parameters
+    if opts.Verbose
+        fprintf('\n=== Final Camera Parameters ===\n');
+        focals = [cameras(initializedList).f];
+        fprintf('Focal lengths: mean=%.1f px, std=%.1f px, range=[%.1f, %.1f]\n', ...
+            mean(focals), std(focals), min(focals), max(focals));
+        
+        if opts.Verbose >= 2
+            for i = initializedList'
+                [yaw, pitch, roll] = extractEulerAngles(cameras(i).R);
+                fprintf('  Camera %d: f=%.1f, yaw=%.1f°, pitch=%.1f°, roll=%.1f°\n', ...
+                    i, cameras(i).f, yaw*180/pi, pitch*180/pi, roll*180/pi);
+            end
+        end
+    end
 end
 
-function stats = check_w2c_sanity(pairs, cameras, imageSizes, num_pairs)
-    % CHECK_W2C_SANITY Probe reprojection RMS under w2c convention on random pairs.
-    %   stats = check_w2c_sanity(pairs, cameras, imageSizes)
-    %   stats = check_w2c_sanity(pairs, cameras, imageSizes, num_pairs)
-    %   Returns a struct with fields mean, median, max, n based on a random
-    %   subset of pairwise reprojections using world-to-camera rotations.
-    %
-    %   Inputs
-    %   - pairs       : struct array with fields .i,.j,.Ui,.Uj (pixel coords)
-    %   - cameras     : 1xN struct array with fields .R (3x3), .f (scalar)
-    %   - imageSizes  : N-by-2 [H W]
-    %   - num_pairs   : optional number of random pairs to evaluate
-    %
-    %   Output
-    %   - stats: struct with fields mean, median, max, n
 
-    arguments
-        pairs (1, :) struct
-        cameras (1, :) struct
-        imageSizes (:, 3) {mustBeNumeric, mustBeFinite}
-        num_pairs (1, 1) double {mustBeInteger, mustBePositive, mustBeFinite} = min(20, numel(pairs))
-    end
-
-    if nargin < 4, num_pairs = min(20, numel(pairs)); end
-    idx = randperm(numel(pairs), num_pairs);
-
-    rms_w2c = nan(num_pairs, 1);
-    z_eps = 1e-6;
-
-    for k = 1:num_pairs
-        t = idx(k);
-        i = pairs(t).i; j = pairs(t).j;
-        Ui = pairs(t).Ui; Uj = pairs(t).Uj;
-
-        Ri = cameras(i).R; Rj = cameras(j).R; % w2c
-        [Ki, ~] = make_K_and_inv(cameras(i).f, imageSizes(i, :));
-        [~, KjInv] = make_K_and_inv(cameras(j).f, imageSizes(j, :));
-
-        % j -> i (w2c)
-        yj = [Uj, ones(size(Uj, 1), 1)] * KjInv.'; % rays in cam j
-        XYZ = ((yj * Rj) * Ri.') * Ki.'; % pre-divide coords in cam i pixel space
-        z = XYZ(:, 3);
-        good = z > z_eps; % only front-facing / non-grazing
-        if ~any(good), continue; end
-
-        uv = XYZ(good, 1:2) ./ z(good);
-        err = Ui(good, :) - uv;
-        rms_w2c(k) = sqrt(mean(sum(err .^ 2, 2)));
-    end
-
-    % robust summarize
-    rms_w2c = rms_w2c(isfinite(rms_w2c));
-    stats.mean = mean(rms_w2c);
-    stats.median = median(rms_w2c);
-    stats.max = max(rms_w2c);
-    stats.n = numel(rms_w2c);
-
-    fprintf('w2c RMS (z>0 only): mean=%.3f  median=%.3f  max=%.3f  (n=%d)\n', ...
-        stats.mean, stats.median, stats.max, stats.n);
-end
-
-function compare_conventions(pairs, cameras, imageSizes, num_pairs)
-    % COMPARE_CONVENTIONS Compare RMS if rotations are w2c vs c2w by probing pairs.
-    %   compare_conventions(pairs, cameras, imageSizes)
-    %   compare_conventions(pairs, cameras, imageSizes, num_pairs)
-    %   Prints mean RMS under both assumptions to help diagnose convention.
-    %
-    %   Inputs
-    %   - pairs       : struct array with fields .i,.j,.Ui,.Uj
-    %   - cameras     : 1xN struct array with .R (3x3), .f (scalar)
-    %   - imageSizes  : N-by-2 [H W]
-    %   - num_pairs   : optional number of random pairs
-
-    arguments
-        pairs (1, :) struct
-        cameras (1, :) struct
-        imageSizes (:, 3) {mustBeNumeric, mustBeFinite}
-        num_pairs (1, 1) double {mustBeInteger, mustBePositive, mustBeFinite} = min(20, numel(pairs))
-    end
-
-    if nargin < 4, num_pairs = min(20, numel(pairs)); end
-    idx = randperm(numel(pairs), num_pairs);
-
-    rms_w2c = zeros(num_pairs, 1);
-    rms_c2w = zeros(num_pairs, 1);
-
-    for k = 1:num_pairs
-        t = idx(k);
-        i = pairs(t).i; j = pairs(t).j;
-        Ui = pairs(t).Ui; Uj = pairs(t).Uj;
-
-        Ri = cameras(i).R; Rj = cameras(j).R;
-        [Ki, ~] = make_K_and_inv(cameras(i).f, imageSizes(i, :));
-        [~, KjInv] = make_K_and_inv(cameras(j).f, imageSizes(j, :));
-
-        % ---- w2c chain (your BA/renderer convention) ----
-        yj = [Uj, ones(size(Uj, 1), 1)] * KjInv.'; % rays in cam j
-        uvW = ((yj * Rj) * Ri.') * Ki.'; % j->world->i->pix
-        uvW = uvW(:, 1:2) ./ uvW(:, 3);
-        rms_w2c(k) = sqrt(mean(sum((Ui - uvW) .^ 2, 2)));
-
-        % ---- c2w chain (if R is actually c2w) ----
-        uvC = ((yj * Rj.') * Ri) * Ki.'; % j->world->i->pix (c2w)
-        uvC = uvC(:, 1:2) ./ uvC(:, 3);
-        rms_c2w(k) = sqrt(mean(sum((Ui - uvC) .^ 2, 2)));
-    end
-
-    fprintf('Probe: w2c mean RMS=%.3f px | c2w mean RMS=%.3f px (n=%d)\n', ...
-        mean(rms_w2c), mean(rms_c2w), num_pairs);
-end
-
-% ======================================================================
-% ======================  BUILD PAIR LIST FROM CELLS  ==================
-% ======================================================================
 function pairs = build_pairs_from_cells(matches, keypoints)
-    % BUILD_PAIRS_FROM_CELLS Convert matches/keypoints cells to a compact pair list.
-    %   pairs = build_pairs_from_cells(matches, keypoints)
-    %   For each i<j with non-empty matches, collects Ui, Uj pixel coordinates.
-    %
-    %   Inputs
-    %   - matches   : N-by-N cell; matches{i,j} is Mx2 indices into keypoints{i/j}
-    %   - keypoints : 1xN or Nx1 cell; keypoints{i} is 2xK_i (x;y) or K_i-by-2
-    %
-    %   Output
-    %   - pairs     : struct with fields .i,.j,.Ui,.Uj (each Mx2)
-
     arguments
         matches (:, :) cell
         keypoints cell
     end
 
     N = numel(keypoints);
-    plist = [];
-
-    for i = 1:N
-
-        for j = i + 1:N
-            Mij = matches{i, j}';
-            if isempty(Mij), continue; end
-            Ui = keypoints{i}(:, Mij(:, 1))'; % M×2 pixels
-            Uj = keypoints{j}(:, Mij(:, 2))';
-            if isempty(Ui), continue; end
-            pr.i = i; pr.j = j; pr.Ui = Ui; pr.Uj = Uj;
-            plist = [plist, pr]; %#ok<AGROW>
-        end
-
+    
+    % VECTORIZED: Get upper triangle linear indices directly
+    nMax = N * (N - 1) / 2;
+    upperIdx = false(N, N);
+    upperIdx(triu(true(N), 1)) = true;
+    linearIdx = find(upperIdx);
+    
+    % VECTORIZED: Check all matches at once
+    hasMatches = ~cellfun(@isempty, matches(linearIdx));
+    validLinearIdx = linearIdx(hasMatches);
+    nPairs = numel(validLinearIdx);
+    
+    if nPairs == 0
+        pairs = struct('i', {}, 'j', {}, 'Ui', {}, 'Uj', {});
+        return;
     end
-
-    pairs = plist;
+    
+    % VECTORIZED: Convert linear indices to subscripts
+    [validI, validJ] = ind2sub([N, N], validLinearIdx);
+    
+    % Pre-allocate output
+    pairs(nPairs) = struct('i', [], 'j', [], 'Ui', [], 'Uj', []);
+    
+    % Extract keypoints (this loop is unavoidable due to ragged arrays)
+    for k = 1:nPairs
+        i = validI(k);
+        j = validJ(k);
+        Mij = matches{i, j}';
+        
+        pairs(k).i = i;
+        pairs(k).j = j;
+        pairs(k).Ui = keypoints{i}(:, Mij(:, 1))';
+        pairs(k).Uj = keypoints{j}(:, Mij(:, 2))';
+    end
 end
 
-% ======================================================================
-% =========================  PICK NEXT IMAGE  ==========================
-% ======================================================================
-function [nxt, bestNbr] = pick_next_image(initialized, pairs, N)
-    % PICK_NEXT_IMAGE Choose the next uninitialized image with highest match score.
-    %   [nxt, bestNbr] = pick_next_image(initialized, pairs, N)
-    %   Scores each not-yet-initialized image by total matches to initialized ones
-    %   and returns the best image and its best neighbor.
-    %
-    %   Inputs
-    %   - initialized : 1xN logical mask of active images
-    %   - pairs       : struct array with fields .i,.j,.Ui
-    %   - N           : total number of images
-    %
-    %   Outputs
-    %   - nxt      : selected image index or [] if none
-    %   - bestNbr  : the neighbor that scored it best (or first active)
 
-    arguments
-        initialized (1, :) logical
-        pairs (1, :) struct
-        N (1, 1) double {mustBeInteger, mustBePositive, mustBeFinite}
-    end
 
-    scores = zeros(1, N);
-    nbr = zeros(1, N);
-    act = find(initialized);
+% Core optimization function
+function cameras = runLevenbergMarquardt(cameras, camList, seed, matches, ...
+    keypoints, imageSizes, opts)
 
-    for t = 1:numel(pairs)
-        i = pairs(t).i; j = pairs(t).j; M = size(pairs(t).Ui, 1);
-
-        if initialized(i) && ~initialized(j)
-            scores(j) = scores(j) + M; nbr(j) = i;
-        elseif initialized(j) && ~initialized(i)
-            scores(i) = scores(i) + M; nbr(i) = j;
-        end
-
-    end
-
-    scores(initialized) = -inf;
-    [~, nxt] = max(scores);
-    if isinf(scores(nxt)), nxt = []; bestNbr = []; return; end
-    bestNbr = nbr(nxt); if bestNbr == 0, bestNbr = act(1); end
-end
-
-% ======================================================================
-% =============================  LM CORE  ==============================
-% ======================================================================
-function [thetaA, cameras] = run_lm(active, theta0, cameras, pairs, imageSizes, seed, input, opt)
-    % RUN_LM Levenberg–Marquardt over active cameras with robust Huber loss.
-    %   [thetaA, cameras] = run_lm(active, theta0, cameras, pairs, imageSizes, seed, input, opt)
-    %   Optimizes 3D rotations (axis-angle) and focal(s) for active images.
-    %
-    %   Inputs
-    %   - active      : vector of image indices to optimize
-    %   - theta0      : N-by-3 initial axis-angle parameters
-    %   - cameras     : 1xN struct (.R, .f, .K, .initialized)
-    %   - pairs       : struct array (.i,.j,.Ui,.Uj)
-    %   - imageSizes  : N-by-2 [H W]
-    %   - seed        : image index with fixed rotation (and optionally focal)
-    %   - input,opt   : option structs controlling priors and damping
-    %
-    %   Outputs
-    %   - thetaA      : updated axis-angles (same size as theta0)
-    %   - cameras     : updated camera structs
-
-    arguments
-        active (1, :) double {mustBeInteger, mustBePositive, mustBeFinite}
-        theta0 (:, 3) double {mustBeFinite}
-        cameras (1, :) struct
-        pairs (1, :) struct
-        imageSizes (:, 3) double {mustBeFinite}
-        seed (1, 1) double {mustBeInteger, mustBePositive, mustBeFinite}
-        input (1, 1) struct
-        opt (1, 1) struct
-    end
-
-    thetaA = theta0;
-
-    lambda = opt.Lambda0;
-    sigHub = opt.SigmaHuber;
-
-    % f_ref = median([cameras.f]);   % or cameras(seed).f most stable (ties everyone to the seed's f)
-    % BEFORE the LM iterations in run_lm (once):
-    % before LM loop (once per growth step):
-    act0 = active;
-    f_ref_step = median([cameras(act0).f]); % fixed reference
-
-    % --- Fixed Brown–Lowe scale for f (used for LM damping each iteration)
-    if isempty(opt.PriorSigmaF)
-        sigma_f_ref = max(1e-6, f_ref_step / 10); % stable reference for this growth step
+    % Robust schedule (as before)
+    if isfield(opts,'FinalPass') && opts.FinalPass
+        sigmaHuber = opts.SigmaHuber;
     else
-        sigma_f_ref = opt.PriorSigmaF;
+        sigmaHuber = 2.0;
     end
 
-    kappa = 0.18; % allows ~±25 % moves
-    sigma_f_prior = max(1e-6, kappa * f_ref_step);
-    w_fprior = 1 / (sigma_f_prior ^ 2);
+    lambda    = opts.Lambda0;
+    maxIters  = opts.MaxLMIters;
 
-    for it = 1:opt.MaxLMIters
-        [H0, g, Eold, nres] = accumulate_normal_equations(thetaA, cameras, pairs, active, imageSizes, sigHub);
+    % NEW: cached solver state for AMD ordering / ichol precond
+    H = []; g = []; E0 = 0; rmse0 = 0;  % avoid "might be used before defined"
+    solver_state = struct;   % define with a P field so isfield checks pass    
 
-        % --- apples-to-apples metrics like OpenPano ---
-        [R_abs_mean, R_abs_max] = avg_abs_residual(thetaA, cameras, pairs, active, imageSizes);
+    % caps (same as yours)
+    theta_cap = deg2rad(5);
+    frac_df   = 0.15;
 
-        if opt.Verbose
-            fprintf('   avg|r|=%.3f px  max|r|=%.3f px\n', R_abs_mean, R_abs_max);
+    for outer = 1:3
+        [Phi, pmap] = buildDeltaVector(cameras, camList, seed);
+
+        % === NEW: build Brown–Lowe prior once per relinearization
+        Cp_inv  = buildBrownLowePrior(camList, seed, cameras);
+
+        % === NEW: accumulate block normal eqns (no explicit J)
+        [H, g, E0, rmse0] = accumulateNormalEqns_block( ...
+                Phi, pmap, cameras, camList, seed, ...
+                matches, keypoints, imageSizes, sigmaHuber,opts);
+
+        if isfield(opts,'Verbose') && opts.Verbose >= 2
+            fprintf('      (relin) RMSE: %.3f px  nnz(H): %d\n', rmse0, nnz(H));
         end
 
-        % --- choose a per-iteration focal center (adaptive soft prior center)
-        % (damping still uses the fixed sigma_f_ref set before the loop)
-        if input.UseFocalSoftPrior
+        for iter = 1:maxIters
+            % Solve (H + lambda*I + Cp_inv) * delta = -g
+            A = H + Cp_inv + lambda*speye(size(H,1));
+            b = -g;
 
-            if input.UseIterFocalCenter
-                f_ref_center = median([cameras(active).f]);
-            else
-                f_ref_center = f_ref_step; % your fixed value from before the loop
-            end
+            % NEW: pass and receive solver_state (reuses ordering/precond)
+            [delta_raw, solver_state] = solve_spd(A, b, solver_state);
 
-            for k = 1:numel(active)
-                f_idx = (k - 1) * 4 + 4;
-                fi = cameras(active(k)).f;
-                H0(f_idx, f_idx) = H0(f_idx, f_idx) + w_fprior;
-                g(f_idx) = g(f_idx) + w_fprior * (fi - f_ref_center);
-            end
+            % Step caps per camera (unchanged)
+            delta = cap_per_camera_step(delta_raw, pmap, cameras, camList, seed, theta_cap, frac_df);
 
-        end
+            % Trial cameras (apply to Phi then to cameras)
+            Phi_trial = Phi + delta;
+            cam_trial = applyIncrements(cameras, Phi_trial, pmap, camList, []);
 
-        if input.UseFocalSprings
-            % build a quick active-set mask
-            actMask = false(1, numel(cameras)); actMask(active) = true;
+            % Recompute energy at trial (no Jacobian needed)
+            [~, ~, E_trial, rmse_trial] = accumulateNormalEqns_block( ...
+                    Phi_trial, pmap, cameras, camList, seed, ...
+                    matches, keypoints, imageSizes, sigmaHuber,opts);
 
-            % pick a spring strength relative to the prior
-            alpha = 0.35; % very weak vs prior
-            % estimate a robust scale of inlier counts to normalize weights
-            mvec = [];
+            % Marquardt gain ratio using H,g,Cp_inv (no J anywhere)
+            % pred = 0.5 * delta'*(lambda*delta - g + Cp_inv*delta)
+            pred = 0.5 * (delta.'*(lambda*delta - g + Cp_inv*delta));
+            if pred <= 0, rho = -Inf; else, rho = (E0 - E_trial) / pred; end
 
-            for t = 1:numel(pairs)
+            if (E_trial < E0) && (rho > 0)
+                % Accept
+                cameras = cam_trial;
 
-                if actMask(pairs(t).i) && actMask(pairs(t).j)
-                    mvec(end + 1) = size(pairs(t).Ui, 1); %#ok<AGROW> % adapt to your field name
+                % Re-orthonormalize (fast polar instead of full SVD — small speed win)
+                for kk = 1:numel(camList)
+                    i = camList(kk);  if i==seed, continue; end
+                    R = cameras(i).R;
+                    % One-step polar (Newton) ~ orthonormalize
+                    X = R*(R');  % Rsym
+                    R = R * ((3*eye(3) - X) / 2);   % approx (R * (RᵀR)^(-1/2))
+                    % Final safeguard
+                    [U,~,V] = svd(R);
+                    cameras(i).R = U*diag([1,1,sign(det(U*V'))])*V';
                 end
 
+                % Lambda schedule (as before)
+                if rho > 0.75, lambda = lambda/2;
+                elseif rho < 0.25, lambda = lambda*2;
+                end
+                lambda = max(min(lambda, 1e6), 1e-10);
+
+                % Re-linearize
+                [Phi, pmap] = buildDeltaVector(cameras, camList, seed);
+                Cp_inv      = buildBrownLowePrior(camList, seed, cameras);
+                [H, g, E0, rmse0] = accumulateNormalEqns_block( ...
+                        Phi, pmap, cameras, camList, seed, ...
+                        matches, keypoints, imageSizes, sigmaHuber, opts);
+                
+
+                if isfield(opts,'Verbose') && opts.Verbose >= 2
+                    fprintf('      iter %d: RMSE %.3f px  (λ=%.2g)\n', iter, rmse0, lambda);
+                end
+
+                % small convergence check
+                if abs(pred) < 1e-12 || abs(E0 - E_trial) < 1e-9
+                    break;
+                end
+            else
+                % Reject
+                lambda = min(lambda*4, 1e6);
+                if lambda > 1e5, break; end
             end
-
-            m0 = max(1, median(mvec));
-
-            for t = 1:numel(pairs)
-                i = pairs(t).i; j = pairs(t).j;
-                if ~(actMask(i) && actMask(j)), continue; end
-
-                ki = find(active == i, 1); kj = find(active == j, 1);
-                ii = (ki - 1) * 4 + 4; jj = (kj - 1) * 4 + 4;
-
-                mu = alpha * (size(pairs(t).Ui, 1) / m0) * w_fprior;
-
-                % add mu*(f_i - f_j)^2
-                H0(ii, ii) = H0(ii, ii) + mu;
-                H0(jj, jj) = H0(jj, jj) + mu;
-                H0(ii, jj) = H0(ii, jj) - mu;
-                H0(jj, ii) = H0(jj, ii) - mu;
-
-                fi = cameras(i).f; fj = cameras(j).f;
-                g(ii) = g(ii) + mu * (fi - fj);
-                g(jj) = g(jj) + mu * (fj - fi);
-            end
-
         end
-
-        % --- keep gauge (APPLY TO H0,g — the UNDAMPED system) ---
-        seedPos = find(active == seed, 1);
-
-        if ~isempty(seedPos)
-            seedRows = (seedPos - 1) * 4 + (1:3); % fix seed rotation
-            H0(seedRows, :) = 0; H0(:, seedRows) = 0;
-            H0(sub2ind(size(H0), seedRows, seedRows)) = 1e12;
-            g(seedRows) = 0;
-
-            % also fix seed f to kill global f gauge
-            if input.FixSeedFocal
-                frow = (seedPos - 1) * 4 + 4;
-                H0(frow, :) = 0; H0(:, frow) = 0; H0(frow, frow) = 1e12;
-                g(frow) = 0;
-            end
-
-        end
-
-        % --- Brown–Lowe scaled damping (fixed reference per growth step) ---
-        if input.BrownLoweDamping
-            sigma_theta = pi / 16;
-            sigma_f = sigma_f_ref;
-
-            Cinv = spalloc(size(H0, 1), size(H0, 2), size(H0, 1));
-
-            for k = 1:numel(active)
-                base = (k - 1) * 4;
-                Cinv(base + 1, base + 1) = 1 / (sigma_theta ^ 2);
-                Cinv(base + 2, base + 2) = 1 / (sigma_theta ^ 2);
-                Cinv(base + 3, base + 3) = 1 / (sigma_theta ^ 2);
-                Cinv(base + 4, base + 4) = 1 / (sigma_f ^ 2);
-            end
-
-            % --- form damped system ONLY for solving
-            H0 = 0.5 * (H0 + H0.');
-            H = H0 + lambda * Cinv;
-        else
-            % simplest paper-like damping:
-            H = H0 + lambda * speye(size(H0));
-        end
-
-        b = -g;
-
-        try
-            L = chol(H, 'lower');
-            d = L' \ (L \ b);
-        catch
-            d = H \ b;
-        end
-
-        % after solving for d but before apply_update:
-        if input.ClipLogFStep
-            delta = 0.08; % max |Δlog f| per iter (~±12 %)
-
-            for k = 1:numel(active)
-                f_idx = (k - 1) * 4 + 4;
-                fi = cameras(active(k)).f;
-                dfi = d(f_idx);
-                s_step = dfi / max(1e-12, fi); % approx Δlog f
-                s_step = max(-delta, min(delta, s_step));
-                d(f_idx) = s_step * fi; % back to Δf
-            end
-
-        end
-
-        if it == 1 && opt.Verbose
-            jacobian_check(thetaA, cameras, pairs, active, imageSizes, sigHub, seed);
-        end
-
-        % Trial update
-        [thetaTrial, camsTrial] = apply_update(thetaA, cameras, d, active, imageSizes, seed);
-
-        % Evaluate true robust energy
-        Enew = total_energy(thetaTrial, camsTrial, pairs, active, imageSizes, sigHub);
-
-        % --- CORRECT predicted reduction (use UNDAMPED H0) ---
-        if input.PredUsesUndampedH
-            pred =- (g.' * d + 0.5 * (d.' * (H0 * d)));
-        else
-            pred =- (g.' * d + 0.5 * (d.' * (H * d))); % paper-consistent
-        end
-
-        if ~isfinite(pred) || pred <= 0
-            rho = -Inf; % force reject
-        else
-            rho = (Eold - Enew) / pred;
-        end
-
-        % Accept/reject (require actual decrease)
-        if (rho > 0) && (Enew < Eold)
-            thetaA = thetaTrial;
-            cameras = camsTrial;
-            lambda = max(1e-9, lambda * max(1/3, 1 - (2 * rho - 1) ^ 3));
-
-            if opt.Verbose && mod(it, 3) == 1
-                fprintf('   it=%2d  E=%.3f  nres=%d  lambda=%.2e  accepted\n', it, Enew, nres, lambda);
-                print_step_deltas(theta_before, thetaA, cams_before, cameras, active);
-            end
-
-            if norm(d) < 1e-8 || abs(Eold - Enew) < 1e-6, break; end
-        else
-            lambda = min(1e9, lambda * 10);
-            % (do NOT update theta/cameras)
-            if opt.Verbose && mod(it, 3) == 1
-                fprintf('   it=%2d  E=%.3f  nres=%d  lambda=%.2e  REJECT\n', it, Eold, nres, lambda);
-            end
-
-        end
-
     end
 
+    if isfield(opts,'Verbose') && opts.Verbose >= 1
+        fprintf('    Final RMSE: %.3f pixels\n', rmse0);
+    end
 end
 
-function jacobian_check(theta, cameras, pairs, active, imageSizes, sigma, seed)
-    % JACOBIAN_CHECK Finite-difference vs analytic gradient spot check.
-    %   jacobian_check(theta, cameras, pairs, active, imageSizes, sigma, seed)
 
-    arguments
-        theta (:, 3) double {mustBeFinite}
-        cameras (1, :) struct
-        pairs (1, :) struct
-        active (1, :) double {mustBeInteger, mustBePositive, mustBeFinite}
-        imageSizes (:, 3) double {mustBeFinite}
-        sigma (1, 1) double {mustBePositive, mustBeFinite}
-        seed (1, 1) double {mustBeInteger, mustBePositive, mustBeFinite}
-    end
-
-    rng(0); eps = 1e-6; % FD step size
-
-    % Build analytic gradient on a tiny subset
-    [~, g, ~, ~] = accumulate_normal_equations(theta, cameras, pairs, active, imageSizes, sigma);
-
-    % Pick a random active image and parameter slot (θx,θy,θz,f)
-    ai = active(randi(numel(active)));
-    slot = randi(4);
-    idx = (find(active == ai) - 1) * 4 + slot;
-
-    % Finite difference gradient of total energy wrt that param
-    d = zeros(size(g)); d(idx) = eps;
-
-    % +eps
-    [thetaP, camsP] = apply_update(theta, cameras, d, active, imageSizes, seed); % ai only used to keep seed fixed
-    E1 = total_energy(thetaP, camsP, pairs, active, imageSizes, sigma);
-
-    % -eps
-    d(idx) = -eps;
-    [thetaM, camsM] = apply_update(theta, cameras, d, active, imageSizes, seed);
-    E2 = total_energy(thetaM, camsM, pairs, active, imageSizes, sigma);
-
-    g_num = (E1 - E2) / (2 * eps);
-    g_ana = g(idx); % note LM uses b=-g later
-
-    fprintf('J-check img %d slot %d: analytic g=%.4e  numeric g=%.4e  diff=%.2e\n', ...
-        ai, slot, g_ana, g_num, abs(g_ana - g_num));
-end
-
-function [m, mx] = avg_abs_residual(theta, cameras, pairs, active, imageSizes)
-    % AVG_ABS_RESIDUAL Average and max absolute residual over active pairs.
-    %   [m, mx] = avg_abs_residual(theta, cameras, pairs, active, imageSizes)
-
-    arguments
-        theta (:, 3) double {mustBeFinite}
-        cameras (1, :) struct
-        pairs (1, :) struct
-        active (1, :) double {mustBeInteger, mustBePositive, mustBeFinite}
-        imageSizes (:, 3) double {mustBeFinite}
-    end
-
-    activeMask = false(1, numel(cameras)); activeMask(active) = true;
-    tot = 0; cnt = 0; mx = 0; z_eps = 1e-6;
-
-    for t = 1:numel(pairs)
-        i = pairs(t).i; j = pairs(t).j;
-        if ~(activeMask(i) && activeMask(j)), continue; end
-        Ui = pairs(t).Ui; Uj = pairs(t).Uj; M = size(Ui, 1);
-
-        Ri = expm_hat(theta(i, :)); Rj = expm_hat(theta(j, :));
-        [Ki, ~, ~, ~] = make_K_and_inv(cameras(i).f, imageSizes(i, :));
-        [~, KjInv, ~, ~] = make_K_and_inv(cameras(j).f, imageSizes(j, :));
-
-        % j->i
-        yj = [Uj, ones(M, 1)] * KjInv.';
-        XYZ = ((yj * Rj) * Ri.') * Ki.';
-        z = XYZ(:, 3);
-        good = z > z_eps;
-        if ~any(good), continue; end
-        pix = [XYZ(good, 1) ./ z(good), XYZ(good, 2) ./ z(good)];
-        r = Ui(good, :) - pix;
-
-        a = abs(r); tot = tot + sum(a(:)); cnt = cnt + numel(a);
-        mx = max(mx, max(a(:)));
-    end
-
-    m = tot / max(1, cnt);
-end
-
-% ======================================================================
-% ==================  Accumulate J^T(α)J and J^T(α)r  =================
-% ======================================================================
-function [H, g, E, nres] = accumulate_normal_equations(theta, cameras, pairs, active, imageSizes, sigmaHuber)
-    % ACCUMULATE_NORMAL_EQUATIONS Build H=J'(α)J and g=J'(α)r with Huber weights.
-    %   [H,g,E,nres] = accumulate_normal_equations(theta, cameras, pairs, active, imageSizes, sigmaHuber)
-    %
-    %   Inputs:
-    %     theta      : N x 3 axis-angle rotation parameters for all images
-    %     cameras    : 1 x N struct array with camera parameters (f, K, R, etc.)
-    %     pairs      : struct array with fields .i, .j, .Ui, .Uj (matched pairs)
-    %     active     : vector of indices of images to optimize
-    %     imageSizes : N x 2 array of image sizes [H W]
-    %     sigmaHuber : Huber loss scale parameter
-    %
-    %   Outputs:
-    %     H     : sparse normal matrix (4m x 4m, m = numel(active))
-    %     g     : gradient vector (4m x 1)
-    %     E     : robust total energy (Huber loss)
-    %     nres  : total number of residuals accumulated
-
-    arguments
-        theta (:, 3) double {mustBeFinite}
-        cameras (1, :) struct
-        pairs (1, :) struct
-        active (1, :) double {mustBeInteger, mustBePositive, mustBeFinite}
-        imageSizes (:, 3) double {mustBeFinite}
-        sigmaHuber (1, 1) double {mustBePositive, mustBeFinite}
-    end
-
-    m = numel(active);
-    blkSize = 4; % [theta(3), f(1)]
-
-    % map image id -> block index [0..m-1]
-    id2blk = containers.Map('KeyType', 'int32', 'ValueType', 'int32');
-    for k = 1:m, id2blk(int32(active(k))) = int32(k - 1); end
-
-    % init block accumulators
-    Hblocks = cell(m, m); gblocks = cell(m, 1);
-
-    for a = 1:m
-        gblocks{a} = zeros(blkSize, 1);
-        for b = 1:m, Hblocks{a, b} = zeros(blkSize, blkSize); end
-    end
-
-    E = 0; nres = 0;
-
-    % rotation generators
-    E1 = [0 0 0; 0 0 -1; 0 1 0];
-    E2 = [0 0 1; 0 0 0; -1 0 0];
-    E3 = [0 -1 0; 1 0 0; 0 0 0];
-
-    for t = 1:numel(pairs)
-        i = pairs(t).i; j = pairs(t).j;
-        if ~isKey(id2blk, int32(i)) || ~isKey(id2blk, int32(j)), continue; end
-        bi = id2blk(int32(i)) + 1; bj = id2blk(int32(j)) + 1;
-
-        Ui = pairs(t).Ui; Uj = pairs(t).Uj; M = size(Ui, 1);
-        if M == 0, continue; end
-
-        % Camera params
-        Ri = expm_hat(theta(i, :)); Rj = expm_hat(theta(j, :));
-        fi = cameras(i).f; fj = cameras(j).f;
-        [Ki, KiInv, dKi_df, dKiInv_df] = make_K_and_inv(fi, imageSizes(i, :));
-        [Kj, KjInv, dKj_df, dKjInv_df] = make_K_and_inv(fj, imageSizes(j, :));
-
-        % --- j -> i (row-form, right-multiply) ---
-        % Homogenize and back-project in j:
-        yj = [Uj, ones(M, 1)] * KjInv.'; % Mx3  (rows)
-        % Rotate world rays into camera i frame:
-        sJ = yj * Rj; % Mx3  (since s = Rj^T * y  -> rows: y * Rj)
-        % Project in camera i (pre-divide):
-        XYZ = (sJ * Ri.') * Ki.'; % Mx3  (rows: s^T -> (s * Ri^T) * Ki^T)
-        z = XYZ(:, 3);
-        mask = z > 0;
-        if ~any(mask), continue; end
-
-        Ui_m = Ui(mask, :); % M1x2
-        x = XYZ(mask, 1); y = XYZ(mask, 2); z = z(mask);
-        M1 = numel(z);
-        pix = [x ./ z, y ./ z];
-        r = Ui_m - pix; % residuals
-
-        [alpha, rho] = huber_alpha_and_energy(r, sigmaHuber);
-        E = E + sum(rho); nres = nres + 2 * M1;
-
-        % Perspective-divide Jacobian terms
-        invz = 1 ./ z; invz2 = invz .^ 2;
-        A11 = invz; A13 = -x .* invz2; A22 = invz; A23 = -y .* invz2;
-
-        % 3D Jacobian pieces (all Mx3, computed by right-multiplying constants)
-        % d/dθ_i: Ki*(Ri*E_k)*s   -> rows: s * (E_k^T * Ri^T * Ki^T)
-        sJ_m = sJ(mask, :); yj_m = yj(mask, :);
-        Ti1 = sJ_m * (E1.' * Ri.' * Ki.');
-        Ti2 = sJ_m * (E2.' * Ri.' * Ki.');
-        Ti3 = sJ_m * (E3.' * Ri.' * Ki.');
-
-        % d/dθ_j: -Ki*Ri*(E_k*y)  -> rows: -y * (E_k^T * Ri^T * Ki^T)
-        Tj1 =- yj_m * (E1.' * Ri.' * Ki.');
-        Tj2 =- yj_m * (E2.' * Ri.' * Ki.');
-        Tj3 =- yj_m * (E3.' * Ri.' * Ki.');
-
-        % d/df_i: (dKi/df) * Ri * s        -> rows: s * (Ri^T * dKi_df^T)
-        dfi = sJ_m * (Ri.' * dKi_df.');
-
-        % d/df_j: Ki * Ri * Rj^T * (dKjInv/df) * [Uj;1]
-        % rows: [Uj,1] * dKjInv_df^T * Rj * Ri^T * Ki^T
-        dfj = ([Uj(mask, :), ones(M1, 1)] * dKjInv_df.') * (Rj * Ri.' * Ki.');
-
-        [Hii, Hij, Hjj, gi, gj] = accumulate_blocks_huber(A11, A13, A22, A23, r, alpha, ...
-            Ti1, Ti2, Ti3, Tj1, Tj2, Tj3, dfi, dfj);
-
-        Hblocks{bi, bi} = Hblocks{bi, bi} + Hii;
-        Hblocks{bj, bj} = Hblocks{bj, bj} + Hjj;
-        Hblocks{bi, bj} = Hblocks{bi, bj} + Hij;
-        Hblocks{bj, bi} = Hblocks{bj, bi} + Hij.';
-        gblocks{bi} = gblocks{bi} + gi;
-        gblocks{bj} = gblocks{bj} + gj;
-
-        % --- i -> j ---
-        % Back-project in i, rotate toward j, project with Kj
-        yi = [Ui, ones(M, 1)] * KiInv.'; % Mx3
-        sI = yi * Ri; % Mx3   (rows: y * Ri)
-        XYZp = (sI * Rj.') * Kj.'; % Mx3
-        z2 = XYZp(:, 3);
-
-        % keep only forward rays
-        mask2 = z2 > 0;
-        if ~any(mask2), continue; end
-
-        Uj_m = Uj(mask2, :); % M2x2
-        x2 = XYZp(mask2, 1);
-        y2 = XYZp(mask2, 2);
-        z2 = z2(mask2);
-        M2 = numel(z2);
-
-        % residuals (i -> j)
-        pix2 = [x2 ./ z2, y2 ./ z2];
-        r2 = Uj_m - pix2;
-
-        [alpha2, rho2] = huber_alpha_and_energy(r2, sigmaHuber);
-        E = E + sum(rho2); nres = nres + 2 * M2;
-
-        % perspective terms for masked rows
-        invz2 = 1 ./ z2; invz2sq = invz2 .^ 2;
-        B11 = invz2; % ∂(x/z)/∂x'
-        B13 = -x2 .* invz2sq; % ∂(x/z)/∂z'
-        B22 = invz2; % ∂(y/z)/∂y'
-        B23 = -y2 .* invz2sq; % ∂(y/z)/∂z'
-
-        % masked 3D rows
-        sI_m = sI(mask2, :);
-
-        % Jacobian pieces (match your row-form/right-multiply convention)
-        % d/dθ_j:   Kj * (Rj * E_k) * s   => rows: s * (E_k^T * Rj^T * Kj^T)
-        Sj1 = sI_m * (E1.' * Rj.' * Kj.'); % M2x3
-        Sj2 = sI_m * (E2.' * Rj.' * Kj.');
-        Sj3 = sI_m * (E3.' * Rj.' * Kj.');
-
-        % d/dθ_i:  -Kj * Rj * (E_k * s)   => rows: -s * (E_k^T * Rj^T * Kj^T)
-        Si1 =- sI_m * (E1.' * Rj.' * Kj.'); % M2x3
-        Si2 =- sI_m * (E2.' * Rj.' * Kj.');
-        Si3 =- sI_m * (E3.' * Rj.' * Kj.');
-
-        % d/df_j: (dKj/df) * Rj * s       => rows: s * (Rj^T * dKj_df^T)
-        dfj2 = sI_m * (Rj.' * dKj_df.'); % M2x3
-
-        % d/df_i: Kj * Rj * Ri^T * (dKiInv/df) * [Ui;1]
-        % rows: [Ui,1] * dKiInv_df^T * Ri * Rj^T * Kj^T
-        dfi2 = ([Ui(mask2, :), ones(M2, 1)] * dKiInv_df.') * (Ri * Rj.' * Kj.');
-
-        % Now accumulate with the same helper (note i/j order here)
-        % accumulate_blocks_huber(B11,B13,B22,B23, r2, alpha2, ...
-        %     Si1,Si2,Si3,  Sj1,Sj2,Sj3,  dfi2, dfj2)
-        [Hii2, Hij2, Hjj2, gi2, gj2] = accumulate_blocks_huber(B11, B13, B22, B23, r2, alpha2, ...
-            Si1, Si2, Si3, Sj1, Sj2, Sj3, dfi2, dfj2);
-
-        Hblocks{bi, bi} = Hblocks{bi, bi} + Hii2;
-        Hblocks{bj, bj} = Hblocks{bj, bj} + Hjj2;
-        Hblocks{bi, bj} = Hblocks{bi, bj} + Hij2;
-        Hblocks{bj, bi} = Hblocks{bj, bi} + Hij2.';
-        gblocks{bi} = gblocks{bi} + gi2;
-        gblocks{bj} = gblocks{bj} + gj2;
-    end
-
-    % Assemble sparse H, g
-    Nblk = 4 * m;
-    H = spalloc(Nblk, Nblk, 16 * m + 64 * m * (m - 1) / 2);
-    g = zeros(Nblk, 1);
-
-    for a = 1:m
-        ia = (a - 1) * 4 + (1:4);
-        g(ia) = gblocks{a};
-
-        for b = 1:m
-            ib = (b - 1) * 4 + (1:4);
-
-            if any(Hblocks{a, b}(:))
-                H(ia, ib) = H(ia, ib) + Hblocks{a, b};
-            end
-
-        end
-
-    end
-
-end
-
-function [Hii, Hij, Hjj, gi, gj] = accumulate_blocks_huber(A11, A13, A22, A23, r, alpha, ...
-        Ti1, Ti2, Ti3, Tj1, Tj2, Tj3, dfi, dfj)
-    % ACCUMULATE_BLOCKS_HUBER  Accumulates Hessian blocks and gradient vectors using Huber loss.
-    %
-    %   [Hii, Hij, Hjj, gi, gj] = accumulate_blocks_huber(A11, A13, A22, A23, r, alpha, ...
-    %       Ti1, Ti2, Ti3, Tj1, Tj2, Tj3, dfi, dfj)
-    %
-    %   This function computes the Hessian blocks (Hii, Hij, Hjj) and gradient vectors (gi, gj)
-    %   for bundle adjustment using the Huber loss function. It is typically used in the context
-    %   of Levenberg-Marquardt optimization for robust parameter estimation.
-    %
-    %   Inputs:
-    %       A11, A13, A22, A23 - Submatrices of the Jacobian or Hessian related to parameters i and j.
-    %       r       - Residual vector for the current observation.
-    %       alpha   - Huber loss parameter controlling the threshold between quadratic and linear loss.
-    %       Ti1, Ti2, Ti3 - Transformation matrices or vectors for parameter i.
-    %       Tj1, Tj2, Tj3 - Transformation matrices or vectors for parameter j.
-    %       dfi     - Derivative of the function with respect to parameter i.
-    %       dfj     - Derivative of the function with respect to parameter j.
-    %
-    %   Outputs:
-    %       Hii     - Accumulated Hessian block for parameter i.
-    %       Hij     - Accumulated Hessian block between parameters i and j.
-    %       Hjj     - Accumulated Hessian block for parameter j.
-    %       gi      - Gradient vector for parameter i.
-    %       gj      - Gradient vector for parameter j.
-    %
-    %   See also: bundleAdjustmentLM, huberLoss
-
-    arguments
-        A11 (:, 1) double {mustBeFinite}
-        A13 (:, 1) double {mustBeFinite}
-        A22 (:, 1) double {mustBeFinite}
-        A23 (:, 1) double {mustBeFinite}
-        r (:, 2) double {mustBeFinite}
-        alpha (:, 1) double {mustBeFinite}
-        Ti1 (:, 3) double {mustBeFinite}
-        Ti2 (:, 3) double {mustBeFinite}
-        Ti3 (:, 3) double {mustBeFinite}
-        Tj1 (:, 3) double {mustBeFinite}
-        Tj2 (:, 3) double {mustBeFinite}
-        Tj3 (:, 3) double {mustBeFinite}
-        dfi (:, 3) double {mustBeFinite}
-        dfj (:, 3) double {mustBeFinite}
-    end
-
-    M = size(r, 1);
-    Ji1 = two_by_three(A11, A13, A22, A23, Ti1); % M×2
-    Ji2 = two_by_three(A11, A13, A22, A23, Ti2);
-    Ji3 = two_by_three(A11, A13, A22, A23, Ti3);
-    Jif = two_by_three(A11, A13, A22, A23, dfi);
-
-    Jj1 = two_by_three(A11, A13, A22, A23, Tj1);
-    Jj2 = two_by_three(A11, A13, A22, A23, Tj2);
-    Jj3 = two_by_three(A11, A13, A22, A23, Tj3);
-    Jjf = two_by_three(A11, A13, A22, A23, dfj);
-
-    Ji = -cat(3, Ji1, Ji2, Ji3, Jif); % (M×2×4)
-    Jj = -cat(3, Jj1, Jj2, Jj3, Jjf);
-
-    Hii = zeros(4, 4); Hjj = zeros(4, 4); Hij = zeros(4, 4);
-    gi = zeros(4, 1); gj = zeros(4, 1);
-
-    for k = 1:M
-        ak = alpha(k);
-        rk = r(k, :).';
-        Jik = reshape(Ji(k, :, :), [2, 4]);
-        Jjk = reshape(Jj(k, :, :), [2, 4]);
-
-        Hii = Hii + ak * (Jik.' * Jik);
-        Hjj = Hjj + ak * (Jjk.' * Jjk);
-        Hij = Hij + ak * (Jik.' * Jjk);
-
-        gi = gi + ak * (Jik.' * rk);
-        gj = gj + ak * (Jjk.' * rk);
-    end
-
-end
-
-function J2 = two_by_three(A11, A13, A22, A23, T) % T: M×3
-    % TWO_BY_THREE Apply perspective-division Jacobian to a 3-vector field.
-    %   J2 = two_by_three(A11,A13,A22,A23,T)
-
-    arguments
-        A11 (:, 1) double {mustBeFinite}
-        A13 (:, 1) double {mustBeFinite}
-        A22 (:, 1) double {mustBeFinite}
-        A23 (:, 1) double {mustBeFinite}
-        T (:, 3) double {mustBeFinite}
-    end
-
-    Tx = T(:, 1); Ty = T(:, 2); Tz = T(:, 3);
-    J2 = [A11 .* Tx + A13 .* Tz, A22 .* Ty + A23 .* Tz];
-end
-
-% ======================================================================
-% ===========================  ENERGY  =================================
-% ======================================================================
-function E = total_energy(theta, cameras, pairs, active, imageSizes, sigma)
-    % TOTAL_ENERGY Robust total Huber energy for symmetric reprojection.
-    %   E = total_energy(theta, cameras, pairs, active, imageSizes, sigma)
-    %
-    %   Computes the robust (Huber) sum of squared reprojection residuals over
-    %   all active image pairs. For each pair, residuals are evaluated in both
-    %   directions (j->i and i->j) using the current rotations and focal
-    %   lengths. Rays projecting behind a camera (negative depth) are ignored.
-    %
-    %   Inputs:
-    %     theta      - N-by-3 axis–angle rotations for all images (w2c)
-    %     cameras    - 1-by-N struct array with fields:
-    %                  .f  scalar focal length in pixels
-    %                  .K  3x3 intrinsics [f 0 cx; 0 f cy; 0 0 1]
-    %     pairs      - struct array with fields:
-    %                  .i,.j image indices; .Ui,.Uj are M-by-2 pixel coords
-    %     active     - vector of image indices included in the energy
-    %     imageSizes - N-by-2 [H W] image sizes in pixels
-    %     sigma      - Huber scale (pixels); transition between L2 and L1
-    %
-    %   Output:
-    %     E          - Scalar robust energy (sum over all residuals)
-    %
-    %   Notes:
-    %   - Only forward-projected matches (positive depth) contribute.
-    %   - Row-vector/right-multiply convention is used for projection.
-    %   - Robustification performed by huber_energy_only per 2D residual.
-    %
-    %   See also: accumulate_normal_equations, huber_energy_only, expm_hat, make_K_and_inv
-
-    arguments
-        theta (:, 3) double {mustBeFinite}
-        cameras (1, :) struct
-        pairs (1, :) struct
-        active (1, :) double {mustBeInteger, mustBePositive, mustBeFinite}
-        imageSizes (:, 3) double {mustBeFinite}
-        sigma (1, 1) double {mustBePositive, mustBeFinite}
-    end
-
-    activeSet = false(1, numel(cameras)); activeSet(active) = true;
-    E = 0;
-
-    for t = 1:numel(pairs)
-        i = pairs(t).i; j = pairs(t).j;
-        if ~(activeSet(i) && activeSet(j)), continue; end
-        Ui = pairs(t).Ui; Uj = pairs(t).Uj; M = size(Ui, 1);
-
-        Ri = expm_hat(theta(i, :)); Rj = expm_hat(theta(j, :));
-        [Ki, KiInv] = make_K_and_inv(cameras(i).f, imageSizes(i, :));
-        [Kj, KjInv] = make_K_and_inv(cameras(j).f, imageSizes(j, :));
-
-        % --- j -> i ---
-        yj = [Uj, ones(M, 1)] * KjInv.'; % Mx3
-        sJ = yj * Rj; % Mx3
-        XYZ = (sJ * Ri.') * Ki.'; z = XYZ(:, 3);
-        mask = z > 0;
-
-        if any(mask)
-            pix = [XYZ(mask, 1) ./ z(mask), XYZ(mask, 2) ./ z(mask)];
-            r = Ui(mask, :) - pix;
-            E = E + sum(huber_energy_only(r, sigma));
-        end
-
-        % --- i -> j ---
-        yi = [Ui, ones(M, 1)] * KiInv.'; % Mx3
-        sI = yi * Ri; % Mx3
-        XYZp = (sI * Rj.') * Kj.'; z2 = XYZp(:, 3);
-        mask2 = z2 > 0;
-
-        if any(mask2)
-            pix2 = [XYZp(mask2, 1) ./ z2(mask2), XYZp(mask2, 2) ./ z2(mask2)];
-            r2 = Uj(mask2, :) - pix2;
-            E = E + sum(huber_energy_only(r2, sigma));
-        end
-
-    end
-
-end
-
-% ======================================================================
-% ====================  UPDATES AND UTILITIES  =========================
-% ======================================================================
-function [thetaNew, camerasNew] = apply_update(theta, cameras, d, active, imageSizes, seed)
-    % APPLY_UPDATE Apply parameter increment d to active images (θ and f).
-    %   [thetaNew, camerasNew] = apply_update(theta, cameras, d, active, imageSizes, seed)
-
-    arguments
-        theta (:, 3) double {mustBeFinite}
-        cameras (1, :) struct
-        d (:, 1) double {mustBeFinite}
-        active (1, :) double {mustBeInteger, mustBePositive, mustBeFinite}
-        imageSizes (:, 3) double {mustBeFinite}
-        seed (1, 1) double {mustBeInteger, mustBePositive, mustBeFinite}
-    end
-
-    thetaNew = theta; camerasNew = cameras;
-
-    for k = 1:numel(active)
-        i = active(k);
-        di = d((k - 1) * 4 + (1:4));
-        % rotation: keep seed fixed
-        if i ~= seed
-            thetaNew(i, :) = theta(i, :) + di(1:3).';
-            camerasNew(i).R = expm_hat(thetaNew(i, :));
-        else
-            thetaNew(i, :) = [0 0 0];
-            camerasNew(i).R = eye(3);
-        end
-
-        % focal
-        camerasNew(i).f = max(1e-6, cameras(i).f + di(4));
-        cx = imageSizes(i, 2) / 2; cy = imageSizes(i, 1) / 2; f = camerasNew(i).f;
-        camerasNew(i).K = [f, 0, cx; 0, f, cy; 0, 0, 1];
-    end
-
-end
-
-function [K, Kinv, dK_df, dKinv_df] = make_K_and_inv(f, sizes)
-    % MAKE_K_AND_INV Intrinsics K, its inverse, and their derivatives w.r.t f.
-    %   [K,Kinv,dK_df,dKinv_df] = make_K_and_inv(f, sizes)
-
-    arguments
-        f (1, 1) double {mustBePositive, mustBeFinite}
-        sizes (1, 3) double {mustBeFinite}
-    end
-
-    H = sizes(1); W = sizes(2);
-    cx = W / 2; cy = H / 2;
-    K = [f, 0, cx; 0, f, cy; 0, 0, 1];
-    Kinv = [1 / f, 0, -cx / f; 0, 1 / f, -cy / f; 0, 0, 1];
-    dK_df = [1, 0, 0; 0, 1, 0; 0, 0, 0];
-    dKinv_df = [-1 / f ^ 2, 0, cx / f ^ 2; 0, -1 / f ^ 2, cy / f ^ 2; 0, 0, 0];
-end
-
-function [alpha, rho] = huber_alpha_and_energy(r, sigma)
-    % HUBER_ALPHA_AND_ENERGY Huber weighting alpha and robust rho(r) per residual.
-    %   [alpha,rho] = huber_alpha_and_energy(r, sigma)
-
-    arguments
-        r (:, 2) double {mustBeFinite}
-        sigma (1, 1) double {mustBePositive, mustBeFinite}
-    end
-
-    nr = sqrt(sum(r .^ 2, 2));
-    alpha = 2 * ones(size(nr));
-    mask = nr >= sigma;
-    alpha(mask) = 2 * sigma ./ max(nr(mask), 1e-12);
-    rho = nr .^ 2;
-    rho(mask) = 2 * sigma * nr(mask) - sigma ^ 2;
-end
-
-function rho = huber_energy_only(r, sigma)
-    % HUBER_ENERGY_ONLY Robust Huber energy for 2D residuals.
-    %   rho = huber_energy_only(r, sigma)
-
-    arguments
-        r (:, 2) double {mustBeFinite}
-        sigma (1, 1) double {mustBePositive, mustBeFinite}
-    end
-
-    nr = sqrt(sum(r .^ 2, 2));
-    rho = nr .^ 2;
-    mask = nr >= sigma;
-    rho(mask) = 2 * sigma * nr(mask) - sigma ^ 2;
-end
-
-function R = expm_hat(w)
-    % EXPM_HAT Rodrigues' formula for SO(3) from axis-angle 3-vector.
-    %   R = expm_hat(w)
-
-    arguments
-        w (1, 3) double {mustBeFinite}
-    end
-
-    th = norm(w);
-    if th < 1e-12, R = eye(3); return; end
-    k = w(:) / th;
-    K = [0 -k(3) k(2);
-         k(3) 0 -k(1);
-         -k(2) k(1) 0];
-    R = eye(3) + sin(th) * K + (1 - cos(th)) * (K * K);
-end
-
-function print_step_deltas(theta_old, theta_new, cams_old, cams_new, active)
-    % PRINT_STEP_DELTAS Log median/max rotation and focal changes for active set.
-    %   print_step_deltas(theta_old, theta_new, cams_old, cams_new, active)
-
-    arguments
-        theta_old (:, 3) double {mustBeFinite}
-        theta_new (:, 3) double {mustBeFinite}
-        cams_old (1, :) struct
-        cams_new (1, :) struct
-        active (1, :) double {mustBeInteger, mustBePositive, mustBeFinite}
-    end
-
-    rot_deg = zeros(numel(active), 1);
-    df = zeros(numel(active), 1);
-
-    for k = 1:numel(active)
-        i = active(k);
-        w = theta_new(i, :) - theta_old(i, :);
-        rot_deg(k) = norm(w) * 180 / pi; % small-angle approx
-        df(k) = cams_new(i).f - cams_old(i).f;
-    end
-
-    fprintf('   Δrot(deg) median=%.4g  max=%.4g | Δf px median=%.4g  max=%.4g\n', ...
-        median(rot_deg), max(rot_deg), median(df), max(df));
-end
-
-%--------------------------------------------------------------------------
-% Camera parameters estimation functions
-%--------------------------------------------------------------------------
-function cameras = initializeCameraMatrices(input, pairs, imageSizes, initialTforms, seed, num_images)
-    % INITIALIZECAMERAMATRICES Build initial camera struct array (K,R,f,initialized).
-    %   cameras = initializeCameraMatrices(input, pairs, imageSizes, initialTforms, seed, num_images)
-
-    arguments
-        input (1, 1) struct
-        pairs (1, :) struct
-        imageSizes (:, 3) double {mustBeFinite}
-        initialTforms
-        seed (1, 1) double {mustBeInteger, mustBePositive, mustBeFinite}
-        num_images (1, 1) double {mustBeInteger, mustBePositive, mustBeFinite}
-    end
-
-    % You already have: pairs, imageSizes (N×2), num_images = N, and seed
-    [K, R, f_used] = initializeKRf(input, pairs, imageSizes, num_images, seed, initialTforms);
-
-    K = K(:); R = R(:);
-
-    if isscalar(f_used)
-        f_vec = repmat(f_used, num_images, 1);
-    else
-        f_vec = f_used(:);
-    end
-
-    cameras = struct( ...
-        'f', num2cell(f_vec), ...
-        'K', K(:), ...
-        'R', R(:), ...
-        'initialized', num2cell(false(num_images, 1)));
-
-    cameras = cameras'; % now 1×N instead of N×1
-end
-
+function [H, g, E, rmse] = accumulateNormalEqns_block( ...
+    Phi, pmap, baseCams, camList, seed, matches, keypoints, imageSizes, sigmaHuber, opts)
+% Build H = JᵀJ and g = Jᵀr without ever forming J.
+% Residuals are evaluated at the *incremented* cameras, Jacobian at base (Gauss-Newton).
 %
-function [K, R, f_used] = initializeKRf(input, pairs, imageSizes, num_images, seed, initialTforms)
-    % INITIALIZEKRF Initialize intrinsics K, rotations R and focal(s) from H list.
-    %   [K,R,f_used] = initializeKRf(input, pairs, imageSizes, num_images, seed, initialTforms)
-    % initializeKRf
-    % Robustly initialize intrinsics K, rotations R, and focal(s) for panorama BA.
-    %
-    % Inputs
-    %   pairs          : struct array with fields:
-    %                    .i, .j               (image indices, i<j recommended)
-    %                    .Ui (M×2), .Uj (M×2) matched pixel coords (x,y)
-    %   imageSizes     : N×2 [H W]
-    %   num_images     : N
-    %   seed           : chosen seed image index (gauge fix)
-    %   initialTforms  : [] OR either:
-    %                    - cell NxN with projective2d or 3×3 H mapping j->i
-    %                    - struct array with fields .i, .j, .H (j->i)
-    %
-    % Outputs
-    %   K      : 1×N cell, K{i} = [f 0 cx; 0 f cy; 0 0 1]
-    %   R      : 1×N cell, absolute rotations (w2c) with R{seed}=I
-    %   f_used : scalar if estimated globally; otherwise N×1 vector of per-image fallback focals
+% Layout per camera: [dθx dθy dθz df] (seed still contributes only df)
+% We keep the column layout returned by buildDeltaVector/pmap (so no API break).
 
-    arguments
-        input (1, 1) struct
-        pairs (1, :) struct
-        imageSizes (:, 3) double {mustBeFinite}
-        num_images (1, 1) double {mustBeInteger, mustBePositive, mustBeFinite}
-        seed (1, 1) double {mustBeInteger, mustBePositive, mustBeFinite}
-        initialTforms
+    % Cameras used for residual evaluation
+    cam_lin = applyIncrements(baseCams, Phi, pmap, camList, []);  %#ok<NASGU> (for clarity)
+
+    % Column span per camera in Phi
+    % seed has 1 dof (df), others 4 dof. Build a fast map.
+    maxIdx = pmap(end).startIdx + (pmap(end).isSeed==0)*3;
+    P = maxIdx;     % number of parameters
+    H = spalloc(P, P, 40*numel(camList));   % coarse guess; will grow
+    g = zeros(P,1);
+
+      
+
+    % Pre-compute column indices per camera
+    % colsMap{i} -> 1 or 4-element vector into [1..P]
+    Nmax = max([camList(:).']);
+    colsMap = cell(Nmax,1);
+    for t=1:numel(pmap)
+        i = pmap(t).camIdx;
+        s = pmap(t).startIdx;
+        if pmap(t).isSeed
+            colsMap{i} = s;          % [df]
+        else
+            colsMap{i} = s:(s+3);    % [dθx dθy dθz df]
+        end
     end
 
-    N = num_images;
-    K = cell(1, N);
-    R = repmat({eye(3)}, 1, N);
+    % Build compact list of (i,j) pairs within camList
+    pairList = struct('i',{},'j',{},'Ui',{},'Uj',{});
+    idx = 1;
+    present = false(1, max(numel(keypoints), Nmax));
+    present(camList) = true;
 
-    % ---------- (A) Gather homographies (j->i) for all pairs ----------
-    Hlist = struct('i', {}, 'j', {}, 'H', {});
+    for ii = 1:numel(camList)
+        i = camList(ii);
+        for jj = ii+1:numel(camList)
+            j = camList(jj);
+            if isempty(matches{i,j}), continue; end
+            % Extract M×2 pixel coordinates (like your build_pairs_from_cells)
+            mpairs = matches{i,j}.';              % M×2
+            Ui = keypoints{i}(:,mpairs(:,1)).';   % M×2 (on image i)
+            Uj = keypoints{j}(:,mpairs(:,2)).';   % M×2 (on image j)
+            if isempty(Ui), continue; end
+    
+            % ---- Subsample over-connected edges (cap to opts.MaxMatches) ----
+            if isfield(opts,'MaxMatches') && isfinite(opts.MaxMatches)
+                [Ui, Uj] = subsample_matches( ...
+                    Ui, Uj, baseCams(i), baseCams(j), imageSizes(i,:), imageSizes(j,:), opts);
+                if isempty(Ui), continue; end
+            end
 
-    for t = 1:numel(pairs)
-        i = pairs(t).i; j = pairs(t).j;
-        Hji = getHomog_j_to_i(input, pairs(t), imageSizes, initialTforms);
+            pairList(idx).i  = i;
+            pairList(idx).j  = j;
+            pairList(idx).Ui = Ui;
+            pairList(idx).Uj = Uj;
+            idx = idx + 1;
+        end
+    end
 
-        if ~isempty(Hji) && all(isfinite(Hji(:))) && rank(Hji) == 3
-            Hlist(end + 1).i = i; %#ok<AGROW>
-            Hlist(end).j = j;
-            Hlist(end).H = Hji;
+    if isempty(pairList)
+        E = 0; rmse = 0; return;
+    end
+    
+    M = size(Ui,1);
+    % Per-pair accumulation (parallel if you like)
+    out(numel(pairList)) = struct('bi',[],'bj',[],'Hii',[],'Hjj',[],'Hij',[],'gi',[],'gj',[],'E',0,'R2sum',0,'Rcnt',0); %#ok<NASGU>
+    parfor p = 1:numel(pairList)
+        i = pairList(p).i; j = pairList(p).j;
+        Ui = pairList(p).Ui; Uj = pairList(p).Uj;
+
+        % Residuals at incremented cams; Jacobian at base cams (Gauss-Newton)
+        % We use the *current* baseCams for Jacobians and *Phi-updated* for residuals:
+        % → good tradeoff of speed/stability (same as your previous design).
+        [rij, Ji, Jj, E_ij, r2sum, rcnt] = jacobian_pair( ...
+                Ui, Uj, baseCams(i), baseCams(j), cam_lin(i), cam_lin(j), ...
+                imageSizes(i,:), imageSizes(j,:), sigmaHuber, colsMap{i}, colsMap{j}, ...
+                opts);
+
+        % Blocks (note: Ji,Jj already shaped as (2M × ci) and (2M × cj))
+        Hii = Ji.'*Ji;    Hjj = Jj.'*Jj;    Hij = Ji.'*Jj;
+        gi  = Ji.'*rij;   gj  = Jj.'*rij;
+
+        out(p).bi  = colsMap{i};
+        out(p).bj  = colsMap{j};
+        out(p).Hii = Hii;   out(p).Hjj = Hjj;   out(p).Hij = Hij;
+        out(p).gi  = gi;    out(p).gj  = gj;
+        out(p).E   = E_ij;  out(p).R2sum = r2sum; out(p).Rcnt = rcnt;
+    end
+
+    % --- Serial reduction (triplets -> single sparse assembly) ---
+    P = size(H,1);
+    I = zeros(0,1); J = zeros(0,1); V = zeros(0,1);
+    gg = zeros(P,1);
+    E = 0; R2sum = 0; Rcnt = 0;
+    for p = 1:numel(pairList)
+        % Force column vectors so subsequent indexing returns columns
+        bi = out(p).bi(:); 
+        bj = out(p).bj(:);
+    
+        % Hii
+        [ii, jj, vv] = find(out(p).Hii);
+        if ~isempty(vv)
+            I = [I; bi(ii(:))];
+            J = [J; bi(jj(:))];
+            V = [V; vv(:)];
+        end
+    
+        % Hjj
+        [ii, jj, vv] = find(out(p).Hjj);
+        if ~isempty(vv)
+            I = [I; bj(ii(:))];
+            J = [J; bj(jj(:))];
+            V = [V; vv(:)];
+        end
+    
+        % Hij and symmetric
+        [ii, jj, vv] = find(out(p).Hij);
+        if ~isempty(vv)
+            I = [I; bi(ii(:))];   J = [J; bj(jj(:))];   V = [V; vv(:)];
+            I = [I; bj(jj(:))];   J = [J; bi(ii(:))];   V = [V; vv(:)];
+        end
+    
+        % RHS
+        gg(bi) = gg(bi) + out(p).gi(:);
+        gg(bj) = gg(bj) + out(p).gj(:);
+
+         E       = E        + out(p).E;
+        R2sum    = R2sum    + out(p).R2sum;
+        Rcnt     = Rcnt     + out(p).Rcnt;
+    end
+    
+    H = sparse(I, J, V, P, P);
+    g = gg;
+
+    rmse = sqrt(max(R2sum,0) / max(Rcnt,1));
+end
+
+
+function [r_stacked, Ji, Jj, E_sum, r2sum, rcnt] = jacobian_pair( ...
+    Ui, Uj, cam_i_base, cam_j_base, cam_i_lin, cam_j_lin, ...
+    size_i, size_j, sigmaHuber, cols_i, cols_j, opts)
+% JACOBIAN_PAIR  Build residual/Jacobians for a pair (i,j), optionally one-direction only.
+%
+% If opts.OneDirection==true, only uses j->i residuals (2 per match).
+% Otherwise (default), uses both j->i and i->j (4 per match).
+%
+% Outputs:
+%   r_stacked : (2M or 4M) x 1 residual vector (Huber-weighted)
+%   Ji, Jj    : (2M or 4M) x (#cols_i/#cols_j) Jacobian blocks
+%   E_sum     : scalar total energy 0.5*||r||^2
+%   r2sum     : sum of squared residuals (for RMSE)
+%   rcnt      : number of residual scalars (2M or 4M)
+
+    if nargin < 12, opts = struct; end
+    do_both = ~(isfield(opts,'OneDirection') && opts.OneDirection);
+
+    M = size(Ui,1);
+    rows_per_match = 2 * (1 + do_both);      % 2 (one-dir) or 4 (both)
+    R = rows_per_match * M;
+
+    % Preallocate outputs
+    r_stacked = zeros(R,1);
+    Ji = zeros(R, numel(cols_i));
+    Jj = zeros(R, numel(cols_j));
+
+    E_sum = 0; r2sum = 0; rcnt = 0;
+
+    % Tight loop with preallocated row pointer
+    rp = 1;
+    for k = 1:M
+        ui = Ui(k,:).';
+        uj = Uj(k,:).';
+
+        % ---------- j -> i ----------
+        % Jacobian at base cams, residual at lin cams
+        [rij_base,  Jij_i, Jij_j] = computeSingleResidual( ...
+            ui, uj, cam_i_base, cam_j_base, size_i, size_j);
+        [rij_lin,   ~,      ~    ] = computeSingleResidual( ...
+            ui, uj, cam_i_lin,  cam_j_lin,  size_i, size_j);
+
+        w_ij  = huberWeight(norm(rij_lin), sigmaHuber);
+        sw_ij = sqrt(w_ij);
+
+        % Place j->i rows
+        r_stacked(rp:rp+1) = sw_ij * rij_lin;
+        Ji(rp:rp+1, :)     = sw_ij * Jij_i(:, 1:numel(cols_i));
+        Jj(rp:rp+1, :)     = sw_ij * Jij_j(:, 1:numel(cols_j));
+
+        E_sum = E_sum + 0.5 * (sw_ij^2) * (rij_lin.'*rij_lin);
+        r2sum = r2sum + (sw_ij^2) * (rij_lin.'*rij_lin);
+        rcnt  = rcnt  + 2;
+
+        rp = rp + 2;
+
+        % ---------- i -> j (optional) ----------
+        if do_both
+            [rji_base,  Jji_j, Jji_i] = computeSingleResidual( ...
+                uj, ui, cam_j_base, cam_i_base, size_j, size_i);
+            [rji_lin,   ~,     ~    ] = computeSingleResidual( ...
+                uj, ui, cam_j_lin,  cam_i_lin,  size_j, size_i);
+
+            w_ji  = huberWeight(norm(rji_lin), sigmaHuber);
+            sw_ji = sqrt(w_ji);
+
+            r_stacked(rp:rp+1) = sw_ji * rji_lin;
+            % Note role swap: J wrt camera-i params uses Jji_i; wrt camera-j uses Jji_j
+            Ji(rp:rp+1, :)     = sw_ji * Jji_i(:, 1:numel(cols_i));
+            Jj(rp:rp+1, :)     = sw_ji * Jji_j(:, 1:numel(cols_j));
+
+            E_sum = E_sum + 0.5 * (sw_ji^2) * (rji_lin.'*rji_lin);
+            r2sum = r2sum + (sw_ji^2) * (rji_lin.'*rji_lin);
+            rcnt  = rcnt  + 2;
+
+            rp = rp + 2;
+        end
+    end
+end
+
+function [x, state] = solve_spd(A, b, state)
+%SOLVE_SPD Cached solver for (near) SPD sparse systems.
+% state is an optional struct you can keep & pass back in/out.
+
+    persistent cache
+    if nargin < 3 || isempty(state), state = struct; end
+    key = [];
+    if issparse(A)
+        % Hash pattern (rows, cols, nnz) — cheap heuristic
+        key = [size(A,1), size(A,2), nnz(A)];
+    end
+
+    use_cache = issparse(A) && isfield(cache,'key') && isequal(cache.key, key);
+
+    if issparse(A)
+        if ~use_cache
+            % Build & cache permutation and preconditioner
+            p = symamd(A); Ap = A(p,p);
+            cache.key = key;  cache.p = p;
+
+            % Try Cholesky once on the pattern
+            [R, flag] = chol(Ap);
+            if flag == 0
+                cache.method = 'chol'; cache.R = R;
+            else
+                setup = struct('type','ict','droptol',1e-3,'diagcomp',0.01);
+                try
+                    L = ichol(Ap, setup);
+                    cache.method = 'pcg'; cache.L = L;
+                catch
+                    cache.method = 'slash'; % fallback
+                end
+            end
+        else
+            p = cache.p; Ap = A(p,p);
         end
 
+        bp = b(p);
+        switch cache.method
+            case 'chol'
+                R = chol(Ap);   % numeric chol on same ordering is fast
+                y = R \ (R' \ bp);
+            case 'pcg'
+                [y, flag] = pcg(Ap, bp, 1e-6, 200, cache.L, cache.L');
+                if flag ~= 0, y = Ap \ bp; end
+            otherwise
+                y = Ap \ bp;
+        end
+        x      = zeros(size(b));
+        x(p)   = y;
+        if nargout>2, state.solver_cache = cache; end
+    else
+        x = A \ b;
     end
 
-    % Estimate focal lengths
-    switch input.focalEstimateMethod
-        case 'shumSzeliski'
-            % ---------- (B) Estimate global focal via Shum–Szeliski over all edges ----------
-            f_cands = [];
+    % after solving:
+    state.last_n = size(A,1);
+    state.last_nz =nnz(A);
+end
 
-            for k = 1:numel(Hlist)
-                i = Hlist(k).i; j = Hlist(k).j; H = Hlist(k).H;
 
-                Hi = imageSizes(i, 1); Wi = imageSizes(i, 2);
-                Hj = imageSizes(j, 1); Wj = imageSizes(j, 2);
-
-                Hn = center_and_normalize_H(H, Wi, Hi, Wj, Hj);
-                if isempty(Hn), continue; end
-
-                f_ij = focal_from_H_shum_szeliski(Hn);
-
-                if ~isempty(f_ij) && isfinite(f_ij) && f_ij > 0
-                    f_cands(end + 1, 1) = f_ij; %#ok<AGROW>
-                end
-
+function delta_c = cap_per_camera_step(delta, pmap, cameras, camList, seed, theta_cap, frac_df)
+    delta_c = delta;
+    for k = 1:numel(pmap)
+        s = pmap(k).startIdx;
+        i = pmap(k).camIdx;
+        if pmap(k).isSeed
+            % clamp df
+            f = cameras(i).f;
+            df = delta_c(s);
+            df = max(-frac_df*f, min(frac_df*f, df));
+            delta_c(s) = df;
+        else
+            dth = delta_c(s:s+2);
+            a   = norm(dth);
+            if a > theta_cap
+                dth = dth * (theta_cap / a);
+                delta_c(s:s+2) = dth;
             end
+            f = cameras(i).f;
+            df = delta_c(s+3);
+            df = max(-frac_df*f, min(frac_df*f, df));
+            delta_c(s+3) = df;
+        end
+    end
+end
 
-            % Robust aggregation + plausibility clamp
-            haveFocal = ~isempty(f_cands);
+function [Ui_out, Uj_out] = subsample_matches( ...
+        Ui, Uj, cam_i, cam_j, size_i, size_j, opts)
+%SUBSAMPLE_MATCHES  Cap correspondences per edge with controlled sampling.
+% Ui, Uj: M×2 pixels.  cam_i.K/cam_j.K provide [cx,cy] if present.
+% Supports modes: 'random' | 'grid' | 'polar' (see opts.* fields).
 
-            if haveFocal
-                base = median(max(imageSizes, [], 2));
-                f_lo = 0.3 * base; % generous lower bound
-                f_hi = 6.0 * base; % generous upper bound
+    M = size(Ui,1);
+    cap = opts.MaxMatches;
+    if M <= cap
+        Ui_out = Ui; Uj_out = Uj; return;
+    end
 
-                % MAD trim
-                medf = median(f_cands);
-                madf = mad(f_cands, 1);
+    switch lower(opts.SubsampleMode)
+        case 'random'
+            idx = randperm_per_pair(M, cap, cam_i, cam_j);
+            Ui_out = Ui(idx,:); Uj_out = Uj(idx,:);
 
-                if madf == 0
-                    keep = abs(f_cands - medf) <= 1e-6 * max(1, medf);
-                else
-                    keep = abs(f_cands - medf) <= 3 * madf;
-                end
+        case 'grid'
+            % Stratify by a uniform grid on image i (can also average i/j)
+            bins = opts.SubsampleGridBins;  % [rows cols]
+            idx = grid_stratified(Ui, size_i, cap, bins, cam_i, cam_j);
+            Ui_out = Ui(idx,:); Uj_out = Uj(idx,:);
 
-                f_cands = f_cands(keep);
-                f_cands = f_cands(f_cands >= f_lo & f_cands <= f_hi);
-
-                if isempty(f_cands)
-                    haveFocal = false;
-                else
-                    f_used = median(f_cands);
-                    fprintf('Estimated focal length (Shum–Szeliski, robust): %.4f pixels\n', f_used);
-                end
-
-            end
-
-            if ~haveFocal
-                % ---------- (C) Fallback focal(s): 0.8 * max(H,W) per image ----------
-                f_fallback = 0.8 * max(imageSizes, [], 2); % N×1
-                f_used = median(f_fallback);
-                fprintf(['Cannot estimate focal lengths, %s motion model is used! ', ...
-                         'Therefore, using the max(h,w) x 0.8 | f used: %.4f\n'], input.transformationType, f_used);
-            end
-
-        case 'wConstraint'
-            % ---------- (B) Estimate global focal from homographies ----------
-            ws = []; % collect positive candidates for w = 1/f^2
-
-            for k = 1:numel(Hlist)
-                i = Hlist(k).i;
-                H = Hlist(k).H;
-
-                % i, j are the images in H = H(j->i)
-                Hi = imageSizes(i, 1); Wi = imageSizes(i, 2);
-                Hj = imageSizes(j, 1); Wj = imageSizes(j, 2);
-
-                Ci = [1 0 Wi / 2; 0 1 Hi / 2; 0 0 1]; % principal shift for i
-                Cj = [1 0 Wj / 2; 0 1 Hj / 2; 0 0 1]; % principal shift for j
-
-                Hc = Ci \ H * Cj; % **correct**: Ci^{-1} * H * Cj
-
-                % normalize det to 1 (ideal rotation)
-                d = det(Hc);
-                if ~isfinite(d) || d == 0, continue; end
-                s = sign(d) * nthroot(abs(d), 3); % keep orientation positive
-                Hn = Hc / s;
-
-                % constraints with omega=diag(1/f^2, 1/f^2, 1)
-                h1 = Hn(:, 1); h2 = Hn(:, 2);
-
-                denA = h1(1) * h2(1) + h1(2) * h2(2);
-
-                if abs(denA) > eps
-                    wA =- (h1(3) * h2(3)) / denA;
-                    if isfinite(wA) && wA > 0, ws(end + 1) = wA; end %#ok<AGROW>
-                end
-
-                denB = (h1(1) ^ 2 + h1(2) ^ 2) - (h2(1) ^ 2 + h2(2) ^ 2);
-
-                if abs(denB) > eps
-                    wB = (h2(3) ^ 2 - h1(3) ^ 2) / denB;
-                    if isfinite(wB) && wB > 0, ws(end + 1) = wB; end %#ok<AGROW>
-                end
-
-            end
-
-            % ws collected from all pairs (w = 1/f^2), now robustify
-            ws = ws(isfinite(ws) & ws > 0);
-
-            if isempty(ws)
-                haveFocal = false;
-            else
-                % MAD-based filtering on w
-                medw = median(ws);
-                madw = mad(ws, 1); % L1 MAD; robust scale
-
-                if madw == 0
-                    keep = abs(ws - medw) <= 1e-6 * max(1, medw); % degenerate but safe
-                else
-                    keep = abs(ws - medw) <= 3 * madw;
-                end
-
-                ws = ws(keep);
-                haveFocal = ~isempty(ws);
-
-                % Convert to f candidates and clamp to plausible range
-                if haveFocal
-                    f_cands = 1 ./ sqrt(ws);
-
-                    % plausible focal band relative to image sizes
-                    base = median(max(imageSizes, [], 2)); % typical "longer side"
-                    f_lo = 0.3 * base; % generous low bound
-                    f_hi = 6.0 * base; % generous high bound
-
-                    f_cands = f_cands(isfinite(f_cands) & f_cands >= f_lo & f_cands <= f_hi);
-
-                    if isempty(f_cands)
-                        haveFocal = false;
-                    else
-                        f_used = median(f_cands); % robust pick
-                        fprintf('Estimated focal length (robust): %.4f pixels\n', f_used);
-                    end
-
-                end
-
-            end
-
-            if ~haveFocal
-                % ---------- (C) Fallback focal(s): 0.8 * max(H,W) per image ----------
-                f_fallback = 0.8 * max(imageSizes, [], 2); % N×1
-                f_used = median(f_fallback); % vector
-                fprintf(['Cannot estimate focal lengths, %s motion model is used! ', ...
-                         'Therefore, using the max(h,w) x 0.8 | f used: %.4f\n'], input.transformationType, f_used);
-            end
-
-        case 'shumSzeliskiOneH'
-            % ----- Build Hlist (store i->j in column form) -----
-            E = 0; Hlist = struct('i', {}, 'j', {}, 'H', {});
-
-            for t = 1:numel(pairs)
-                i = pairs(t).i; j = pairs(t).j;
-
-                % You already have this:
-                Hji = getHomog_j_to_i(input, pairs(t), imageSizes, initialTforms); % x_i ~ Hji * x_j
-
-                if ~isempty(Hji)
-                    Hij = inv(Hji); % convert to i->j: x_j ~ Hij * x_i
-                    Hij = Hij ./ Hij(3, 3); % normalize scale
-                    if det(Hij) < 0, Hij = -Hij; end % enforce det>0 (helps rotation projection)
-
-                    E = E + 1;
-                    Hlist(E).i = i;
-                    Hlist(E).j = j;
-                    Hlist(E).H = Hij; % *** store i->j ***
-                end
-
-            end
-
-            % Estimate the focal lengths
-            % Collect i->j homographies
-            HAll = {Hlist(:).H};
-
-            % Centering matrices (shift top-left origin to image center)
-            C = @(w, h) [1 0 -w / 2; 0 1 -h / 2; 0 0 1];
-
-            % Build centered homographies (still i->j)
-            Hc = cell(1, numel(HAll));
-
-            for e = 1:numel(HAll)
-                i = Hlist(e).i; j = Hlist(e).j;
-                Ci = C(imageSizes(i, 2), imageSizes(i, 1));
-                Cj = C(imageSizes(j, 2), imageSizes(j, 1));
-                % center both sides, keep column convention
-                Hc{e} = Cj * (HAll{e} ./ HAll{e}(3, 3)) / Ci;
-            end
-
-            % Optional: also consider the opposite direction for robustness
-            Hc_both = [Hc, cellfun(@inv, Hc, 'UniformOutput', false)];
-            fvec = arrayfun(@(tform) focal_from_H_shum_szeliski_unnormalized(tform), Hc_both);
-
-            % Keep valid, robust-aggregate
-            fvec = fvec(isfinite(fvec) & fvec > 0);
-
-            if ~isempty(fvec)
-                f_used = median(fvec);
-                fprintf('Estimated focal length Shum–Szeliski (single homography H): %.4f px\n', f_used);
-            else
-                % Fallback: 0.8*max(h,w) per image -> global median
-                f_fallback = 0.8 * max(imageSizes, [], 2); % N×1
-                f_used = median(f_fallback);
-                fprintf(['Cannot estimate focal lengths, %s motion model is used! ', ...
-                         'Therefore, using the max(h,w) x 0.8 | f used: %.4f\n'], ...
-                    input.transformationType, f_used);
-            end
+        case 'polar'
+            % Stratify by angle & radius around principal point on image i
+            bins = opts.SubsamplePolarBins; % [nAngles nRadii]
+            idx = polar_stratified(Ui, size_i, cap, bins, cam_i, cam_j);
+            Ui_out = Ui(idx,:); Uj_out = Uj(idx,:);
 
         otherwise
-            error('Require one focal estimate method.')
+            % Fallback to random
+            idx = randperm_per_pair(M, cap, cam_i, cam_j);
+            Ui_out = Ui(idx,:); Uj_out = Uj(idx,:);
     end
+end
 
-    % ---------- (D) Build K for all images ----------
-    for i = 1:N
-        Hi = imageSizes(i, 1); Wi = imageSizes(i, 2);
-        cx = Wi / 2; cy = Hi / 2;
-        fi = f_used;
-        K{i} = [fi, 0, cx;
-                0, fi, cy;
-                0, 0, 1];
+function idx = randperm_per_pair(M, K, cam_i, cam_j)
+% deterministic per-pair permutation using a local stream (parfor-safe)
+    % Build a cheap hash/seed from camera pointers (R address changes; use K,cx,cy)
+    ci = double(round(1e3 * cam_i.K(1,3) + 2e3 * cam_i.K(2,3) + cam_i.K(1,1)));
+    cj = double(round(1e3 * cam_j.K(1,3) + 2e3 * cam_j.K(2,3) + cam_j.K(1,1)));
+    seed = mod(uint32(1664525)*uint32(ci) + uint32(1013904223)*uint32(cj), uint32(2^31-1));
+    if seed == 0, seed = uint32(1); end
+
+    try
+        rs = RandStream('threefry','Seed',double(seed));     % fast & stateless
+        idx = randperm(rs, M, K);
+    catch
+        % Fallback if 'threefry' not available
+        rs = RandStream('mt19937ar','Seed',double(seed));
+        idx = randperm(rs, M, K);
     end
+end
 
-    % ---------- (E) Build relative rotations from H and propagate ----------
-    % Prepare adjacency with edge IDs
-    G = cell(N, 1);
 
-    for e = 1:numel(Hlist)
-        i = Hlist(e).i; j = Hlist(e).j;
-        G{i} = [G{i}; j, e]; %#ok<AGROW>
-        G{j} = [G{j}; i, e]; %#ok<AGROW>
-    end
+function idx = grid_stratified(Ui, size_i, Kcap, bins, cam_i, cam_j)
+% Ui: M×2 pixels on image i. bins=[rows cols].
+    M = size(Ui,1);
+    rows = max(1, bins(1)); cols = max(1, bins(2));
+    H = size_i(1); W = size_i(2);
 
-    % Seed gauge
-    for i = 1:N, R{i} = eye(3); end
-    visited = false(N, 1);
-    visited(seed) = true;
+    % Bin each point
+    rbin = min(rows, max(1, ceil(Ui(:,2) * rows / H)));
+    cbin = min(cols, max(1, ceil(Ui(:,1) * cols / W)));
+    binId = (rbin-1)*cols + cbin;      % 1..rows*cols
 
-    % BFS from seed
-    q = seed;
+    % Quota per bin (at least 1 if points exist)
+    nBins = rows*cols;
+    counts = accumarray(binId, 1, [nBins,1], @sum, 0);
+    nonEmpty = find(counts > 0);
 
-    while ~isempty(q)
-        u = q(1); q(1) = [];
-
-        for r = 1:size(G{u}, 1)
-            v = G{u}(r, 1);
-            eid = G{u}(r, 2);
-
-            if ~visited(v)
-                i = Hlist(eid).i; j = Hlist(eid).j; H = Hlist(eid).H;
-
-                if i == u && j == v
-                    Rij = projectToSO3(K{u} \ H * K{v});
-                    R{v} = R{u} * Rij;
-
-                    if strcmp(input.focalEstimateMethod, 'shumSzeliskiOneH')
-                        % K_j^{-1} H_ij K_i = R_j R_i^T
-                        Rij = projectToSO3(K{j} \ H * K{i});
-                        R{v} = Rij * R{u}; % R_j = (R_j R_i^T) * R_i
-                    end
-
-                elseif i == v && j == u
-                    Rji = projectToSO3(K{v} \ H * K{u});
-                    R{v} = R{u} * Rji'; % Rij = (Rji)'
-
-                    if strcmp(input.focalEstimateMethod, 'shumSzeliskiOneH')
-                        % Using H_ji
-                        Rji = projectToSO3(K{u} \ H * K{v}); % K_u^{-1} H_ji K_v = R_u R_v^T
-                        R{v} = (Rji') * R{u}; % R_v = (R_v R_u^T)^T * R_u
-                    end
-
-                else
-                    continue
+    % Distribute cap approximately proportional to counts (with min 1)
+    q = zeros(nBins,1);
+    if ~isempty(nonEmpty)
+        prop = counts(nonEmpty) / sum(counts(nonEmpty));
+        q(nonEmpty) = max(1, round(prop * Kcap));
+        % Trim to exact Kcap
+        over = sum(q) - Kcap;
+        if over > 0
+            % remove 1 from the largest bins until sums to Kcap
+            [~, ord] = sort(q(nonEmpty), 'descend');
+            t = nonEmpty(ord);
+            k = 1;
+            while over > 0 && k <= numel(t)
+                if q(t(k)) > 1
+                    q(t(k)) = q(t(k)) - 1; over = over - 1;
                 end
+                k = k + 1;
+            end
+        elseif over < 0
+            % add to bins with most points
+            [~, ord] = sort(counts(nonEmpty), 'descend');
+            t = nonEmpty(ord);
+            add = -over; k = 1;
+            while add > 0 && k <= numel(t)
+                q(t(k)) = q(t(k)) + 1; add = add - 1; k = k + 1;
+            end
+        end
+    end
 
-                R{v} = projectToSO3(R{v});
-                visited(v) = true;
-                q(end + 1) = v; %#ok<AGROW>
+    % Sample within each bin deterministically
+    idx = zeros(0,1);
+    for b = 1:nBins
+        if q(b) == 0, continue; end
+        members = find(binId == b);
+        if numel(members) <= q(b)
+            idx = [idx; members(:)];
+        else
+            % per-bin stream using bin id (deterministic)
+            seed = uint32(2654435761) * uint32(b);
+            try
+                rs = RandStream('threefry','Seed',double(bitand(seed,2^31-1)));
+            catch
+                rs = RandStream('mt19937ar','Seed',double(bitand(seed,2^31-1)));
+            end
+            pick = members(randperm(rs, numel(members), q(b)));
+            idx = [idx; pick(:)];
+        end
+    end
+
+    % Safety: if due to rounding we got more than Kcap, trim deterministically
+    if numel(idx) > Kcap
+        idx = idx(1:Kcap);
+    end
+end
+
+function idx = polar_stratified(Ui, size_i, Kcap, bins, cam_i, cam_j)
+% bins = [nAngles nRadii]; center at principal point if K exists else image center.
+    M = size(Ui,1);
+    nA = max(1, bins(1)); nR = max(1, bins(2));
+
+    % Center: use intrinsics if available, else image center
+    if isfield(cam_i,'K') && ~isempty(cam_i.K)
+        cx = cam_i.K(1,3); cy = cam_i.K(2,3);
+    else
+        cx = size_i(2)/2; cy = size_i(1)/2;
+    end
+    d = Ui - [cx, cy];                 % M×2
+    ang = atan2(d(:,2), d(:,1));       % [-pi, pi]
+    ang = mod(ang, 2*pi);              % [0, 2pi)
+    rad = hypot(d(:,1), d(:,2));       % [0, ~max radius]
+    % Normalize radius to [0,1] by max possible extent:
+    rmax = hypot(max(cx, size_i(2)-cx), max(cy, size_i(1)-cy));
+    rnorm = min(1, rad / max(rmax, eps));
+
+    abin = min(nA, max(1, floor(ang / (2*pi/nA)) + 1));
+    rbin = min(nR, max(1, floor(rnorm * nR) + 1));
+    binId = (abin-1)*nR + rbin;
+    nBins = nA*nR;
+
+    counts = accumarray(binId, 1, [nBins,1], @sum, 0);
+    nonEmpty = find(counts > 0);
+
+    % Quotas (like grid_stratified)
+    q = zeros(nBins,1);
+    if ~isempty(nonEmpty)
+        prop = counts(nonEmpty) / sum(counts(nonEmpty));
+        q(nonEmpty) = max(1, round(prop * Kcap));
+        over = sum(q) - Kcap;
+        if over > 0
+            [~, ord] = sort(q(nonEmpty), 'descend');
+            t = nonEmpty(ord);
+            k = 1;
+            while over > 0 && k <= numel(t)
+                if q(t(k)) > 1, q(t(k)) = q(t(k)) - 1; over = over - 1; end
+                k = k + 1;
+            end
+        elseif over < 0
+            [~, ord] = sort(counts(nonEmpty), 'descend');
+            t = nonEmpty(ord); add = -over; k = 1;
+            while add > 0 && k <= numel(t)
+                q(t(k)) = q(t(k)) + 1; add = add - 1; k = k + 1;
+            end
+        end
+    end
+
+    % Sample per bin deterministically
+    idx = zeros(0,1);
+    for b = 1:nBins
+        if q(b) == 0, continue; end
+        members = find(binId == b);
+        if numel(members) <= q(b)
+            idx = [idx; members(:)];
+        else
+            seed = uint32(2166136261) * uint32(b);   % FNV-ish
+            try
+                rs = RandStream('threefry','Seed',double(bitand(seed,2^31-1)));
+            catch
+                rs = RandStream('mt19937ar','Seed',double(bitand(seed,2^31-1)));
+            end
+            pick = members(randperm(rs, numel(members), q(b)));
+            idx = [idx; pick(:)];
+        end
+    end
+
+    if numel(idx) > Kcap
+        idx = idx(1:Kcap);
+    end
+end
+
+
+function [Phi, pmap] = buildDeltaVector(cameras, camList, seed)
+    % All-zero increments around current cameras
+    pmap = struct('camIdx',{},'startIdx',{},'isSeed',false);
+    Phi  = [];
+    idx  = 1;
+    for k = 1:numel(camList)
+        i = camList(k);
+        pmap(k).camIdx  = i;
+        pmap(k).startIdx = idx;
+        if i == seed
+            pmap(k).isSeed = true;
+            Phi = [Phi; 0];           % df only
+            idx = idx + 1;
+        else
+            pmap(k).isSeed = false;
+            Phi = [Phi; 0;0;0; 0];    % [dθx dθy dθz df]
+            idx = idx + 4;
+        end
+    end
+end
+
+
+function cams_out = applyIncrements(cameras, Phi, pmap, camList, seed)
+% Fast apply: cache principal point (cx,cy) and only update f and R.
+
+    cams_out = cameras;
+
+    for k = 1:numel(pmap)
+        i = pmap(k).camIdx;
+        s = pmap(k).startIdx;
+
+        % Ensure cx,cy are cached (in case older structs slip in)
+        if ~isfield(cams_out(i),'cx') || isempty(cams_out(i).cx)
+            % Fallback to current K if present, else image center is needed;
+            % best practice: call prepareCameraCache(...) once before LM.
+            if isfield(cams_out(i),'K') && ~isempty(cams_out(i).K)
+                cams_out(i).cx = cams_out(i).K(1,3);
+                cams_out(i).cy = cams_out(i).K(2,3);
+            else
+                % last-resort defaults (won't be used if you pre-cache properly)
+                cams_out(i).cx = 0; cams_out(i).cy = 0;
+            end
+        end
+        cx = cams_out(i).cx; cy = cams_out(i).cy;
+
+        if pmap(k).isSeed
+            % Seed: df only
+            df = Phi(s);
+             oldf = cams_out(i).f;
+            f = max(100, min(5000, oldf + df));
+            if abs(f - oldf) > 1e-9
+                cams_out(i).f = f;
+                Ki = cams_out(i).K;
+                if isempty(Ki), Ki = eye(3); end
+                Ki(1,1) = f; Ki(2,2) = f;
+                cams_out(i).K = Ki;  % cx,cy unchanged
             end
 
+        else
+            % Non-seed: [dθx dθy dθz df]
+            dth = Phi(s:s+2);
+            df  = Phi(s+3);
+
+            % SO(3) increment (left-multiplicative)
+            a = norm(dth);
+            if a < 1e-12
+                Rupd = eye(3) + skewSymmetric(dth);
+            else
+                v = dth / a; K = skewSymmetric(v);
+                Rupd = eye(3) + sin(a)*K + (1-cos(a))*(K*K);
+            end
+
+            cams_out(i).R = Rupd * cams_out(i).R;
+
+            % --- Micro-opt: only update K if f changed significantly ---
+            oldf = cams_out(i).f;
+            f = max(100, min(5000, oldf + df));
+            if abs(f - oldf) > 1e-9
+               cams_out(i).f = f;
+               Ki = cams_out(i).K;
+               if isempty(Ki), Ki = eye(3); end
+               Ki(1,1) = f; Ki(2,2) = f;
+               cams_out(i).K = Ki;   % cx,cy unchanged
+           end
         end
-
     end
-
-    % Ensure seed exactly identity (re-anchor)
-    R{seed} = eye(3);
 end
 
-function f = focal_from_H_shum_szeliski_unnormalized(h)
-    % FOCAL_FROM_H_SHUM_SZELISKI_UNNORMALIZED Estimate focal from one unnormalized H.
-    %   f = focal_from_H_shum_szeliski_unnormalized(hCell)
-    %   hCell should be a 1x1 cell containing a 3x3 homography matrix.
 
-    arguments
-        h cell
+function Cp_inv = buildBrownLowePrior(camList, seed, cameras)
+    % Brown–Lowe units-balancing "prior"
+    % σθ = π/16 (all axes), σf = mean(f)/10  (recomputed every iteration)
+    fbar  = mean([cameras(camList).f]);
+    sigth = pi/16;
+    sigf  = max(1e-6, fbar/10);  % guard
+
+    % Parameter layout: seed -> [df], others -> [dθ(3); df]
+    n = 0;
+    for k = 1:numel(camList), n = n + (camList(k)==seed) + 4*(camList(k)~=seed); end
+
+    diagvals = zeros(n,1); idx = 1;
+    for k = 1:numel(camList)
+        i = camList(k);
+        if i == seed
+            diagvals(idx) = 1/(sigf^2); idx = idx+1;
+        else
+            diagvals(idx:idx+2) = 1/(sigth^2); idx = idx+3;
+            diagvals(idx)       = 1/(sigf^2);  idx = idx+1;
+        end
     end
+    Cp_inv = spdiags(diagvals,0,n,n);
+end
 
-    % Reference: Shum, HY., Szeliski, R. (2001). Construction of
-    % Panoramic Image Mosaics with Global and Local Alignment.
-    % In: Benosman, R., Kang, S.B. (eds) Panoramic Vision.
-    % Monographs in Computer Science. Springer, New York,
-    % NY. https://doi.org/10.1007/978-1-4757-3482-9_13
-
-    % Get the transformation matrix from the cellarray
-    h = h{1};
-
-    % f1 focal length
-    d1 = h(3, 1) * h(3, 2);
-    d2 = (h(3, 2) - h(3, 1)) * (h(3, 2) + h(3, 1));
-    v1 =- (h(1, 1) * h(1, 2) + h(2, 1) * h(2, 2)) / d1;
-    v2 = (h(1, 1) ^ 2 + h(2, 1) ^ 2 - h(1, 2) ^ 2 - h(2, 2) ^ 2) / d2;
-
-    % Swap v1 and v2
-    if v1 < v2
-        temp = v1;
-        v1 = v2;
-        v2 = temp;
+%---------------------------- Minimal to no for loops ------------------------------------
+% Single residual and Jacobian
+function [r, J_obs, J_src] = computeSingleResidual(u_obs, u_src, cam_obs, cam_src, ...
+                                     imageSize_obs, imageSize_src)
+    % Compute residual and Jacobians for one correspondence
+    % Brown-Lowe Eq. 14-15: r = u - p, where p = K R R^T K^{-1} u
+    
+    u_src_h = [u_src; 1];  % Homogeneous coordinates
+    
+    % Project from src to obs: Brown-Lowe Eq. 15
+    p_h = cam_obs.K * cam_obs.R * cam_src.R' * (cam_src.K \ u_src_h);
+    
+    % Dehomogenize
+    if abs(p_h(3)) < 1e-10
+        p_h(3) = 1e-10;
     end
+    p = p_h(1:2) / p_h(3);
+    
+    % Residual: Brown-Lowe Eq. 14
+    r = u_obs - p;
+    
+    % Jacobians: Brown-Lowe Eq. 20-23
+    J_obs = computeJacobianWrtCamera(u_src_h, cam_obs, cam_src, p_h, 'obs');
+    J_src = computeJacobianWrtCamera(u_src_h, cam_obs, cam_src, p_h, 'src');
+end
 
-    % v1 and v2 > condition check
-    if v1 > 0 && v2 > 0
-        f1 = sqrt(v1 * (abs(d1) > abs(d2)) + v2 * (abs(d1) <= abs(d2)));
-    elseif v1 > 0
-        f1 = sqrt(v1);
+% Jacobian w.r.t. camera parameters
+function J = computeJacobianWrtCamera(u_src_h, cam_obs, cam_src, p_h, type)
+    % Brown-Lowe Eq. 20-23: Jacobian computation via chain rule
+    
+    x = p_h(1);
+    y = p_h(2);
+    z = p_h(3);
+    
+    if abs(z) < 1e-10
+        z = 1e-10;
+    end
+    
+    % Dehomogenization Jacobian: Brown-Lowe Eq. 21
+    J_dehom = [1/z,  0,  -x/z^2;
+               0,  1/z,  -y/z^2];
+    
+    % Residual Jacobian: dr/dp = -I
+    J_chain = -J_dehom;
+    
+    if strcmp(type, 'obs')
+        % Observation camera Jacobian
+        
+        % Rotation Jacobian: Brown-Lowe Eq. 22-23
+        J_rot = zeros(2, 3);
+        for m = 1:3
+            e_m = zeros(3, 1);
+            e_m(m) = 1;
+            skew_em = skewSymmetric(e_m);
+            
+            % ∂R/∂θ = R [e_m]×
+            dp_h_dtheta = cam_obs.K * cam_obs.R * skew_em * cam_src.R' * ...
+                (cam_src.K \ u_src_h);
+            
+            J_rot(:, m) = J_chain * dp_h_dtheta;
+        end
+        
+        % Focal length Jacobian
+        dK_df = [1, 0, 0; 0, 1, 0; 0, 0, 0];
+        dp_h_df = dK_df * cam_obs.R * cam_src.R' * (cam_src.K \ u_src_h);
+        J_f = J_chain * dp_h_df;
+        
+        J = [J_rot, J_f];  % 2×4
+        
     else
-        f = 0;
-        return;
+        % Source camera Jacobian
+        
+        J_rot = zeros(2, 3);
+        for m = 1:3
+            e_m = zeros(3, 1);
+            e_m(m) = 1;
+            skew_em = skewSymmetric(e_m);
+            
+            % ∂(R^T)/∂θ = -R^T [e_m]×
+            dp_h_dtheta = cam_obs.K * cam_obs.R * (-cam_src.R' * skew_em) * ...
+                (cam_src.K \ u_src_h);
+            
+            J_rot(:, m) = J_chain * dp_h_dtheta;
+        end
+        
+        % Focal length Jacobian (through K^{-1})
+        dKinv_df = [-1/cam_src.f^2, 0, 0;
+                    0, -1/cam_src.f^2, 0;
+                    0, 0, 0];
+        dp_h_df = cam_obs.K * cam_obs.R * cam_src.R' * dKinv_df * u_src_h;
+        J_f = J_chain * dp_h_df;
+        
+        J = [J_rot, J_f];  % 2×4
     end
+end
 
-    % f0 focal length
-    d1 = h(1, 1) * h(2, 1) + h(1, 2) * h(2, 2);
-    d2 = h(1, 1) ^ 2 + h(1, 2) ^ 2 - h(2, 1) ^ 2 - h(2, 2) ^ 2;
-    v1 = -h(1, 3) * h(2, 3) / d1;
-    v2 = (h(2, 3) ^ 2 - h(1, 3) ^ 2) / d2;
+% Skew-symmetric matrix
+function S = skewSymmetric(v)
+    S = [0,    -v(3),  v(2);
+         v(3),  0,    -v(1);
+        -v(2),  v(1),  0   ];
+end
 
-    % Swap v1 and v2
-    if v1 < v2
-        temp = v1;
-        v1 = v2;
-        v2 = temp;
-    end
-
-    % v1 and v2 > condition check
-    if v1 > 0 && v2 > 0
-        f0 = sqrt(v1 * (abs(d1) > abs(d2)) + v2 * (abs(d1) <= abs(d2)));
-    elseif v1 > 0
-        f0 = sqrt(v1);
+% Huber weight function
+function w = huberWeight(residual_norm, sigma)
+    % Brown-Lowe Eq. 17: Huber robust error function
+    if residual_norm < sigma
+        w = 1;  % L2 for inliers
     else
-        f = 0;
-        return;
+        w = sigma / residual_norm;  % L1 for outliers
     end
-
-    % Check for infinity
-    if isinf(f1) || isinf(f0)
-        f = 0;
-        return;
-    end
-
-    % Geometric mean
-    f = sqrt(f1 * f0);
 end
 
-function f = focal_from_H_shum_szeliski(Hn)
-    % FOCAL_FROM_H_SHUM_SZELISKI Estimate focal from centered, det-normalized H.
-    %   f = focal_from_H_shum_szeliski(Hn)
+function cameras = prepareCameraCache(cameras, imageSizes)
+% Cache principal point per camera (cx,cy) once.
+% If K already has cx,cy, keep them; otherwise, use image center.
 
-    % Reference: Shum, HY., Szeliski, R. (2001). Construction of
-    % Panoramic Image Mosaics with Global and Local Alignment.
-    % In: Benosman, R., Kang, S.B. (eds) Panoramic Vision.
-    % Monographs in Computer Science. Springer, New York,
-    % NY. https://doi.org/10.1007/978-1-4757-3482-9_13
+    N = numel(cameras);
+    for i = 1:N
+        if ~isfield(cameras(i),'cx') || isempty(cameras(i).cx)
+            if isfield(cameras(i),'K') && ~isempty(cameras(i).K)
+                cx = cameras(i).K(1,3);  cy = cameras(i).K(2,3);
+            else
+                % imageSizes(i,:) = [H W ...]
+                cx = imageSizes(i,2) / 2;
+                cy = imageSizes(i,1) / 2;
+            end
+            cameras(i).cx = cx;
+            cameras(i).cy = cy;
 
-    % Hn: centered & det-normalized column-form homography (j->i)
-    % Returns a single positive focal candidate f (scalar) or [] if invalid.
-    arguments
-        Hn (3, 3) double {mustBeFinite}
+            % normalize K to use these cached cx,cy
+            if isfield(cameras(i),'f') && ~isempty(cameras(i).f)
+                f = cameras(i).f;
+                cameras(i).K = [f, 0, cx; 0, f, cy; 0, 0, 1];
+            end
+        end
     end
-
-    % --- First focal (f1) from bottom row & left 2x2 block
-    d1 = Hn(3, 1) * Hn(3, 2);
-    d2 = (Hn(3, 2) - Hn(3, 1)) * (Hn(3, 2) + Hn(3, 1));
-
-    v1 =- (Hn(1, 1) * Hn(1, 2) + Hn(2, 1) * Hn(2, 2));
-    v2 = (Hn(1, 1) ^ 2 + Hn(2, 1) ^ 2 - Hn(1, 2) ^ 2 - Hn(2, 2) ^ 2);
-
-    % --- Second focal (f0) from right column & left 2x2 block
-    d1b = Hn(1, 1) * Hn(2, 1) + Hn(1, 2) * Hn(2, 2);
-    d2b = Hn(1, 1) ^ 2 + Hn(1, 2) ^ 2 - Hn(2, 1) ^ 2 - Hn(2, 2) ^ 2;
-
-    v1b = -Hn(1, 3) * Hn(2, 3);
-    v2b = (Hn(2, 3) ^ 2 - Hn(1, 3) ^ 2);
-
-    f1sq = candidate_v_to_f2(v1, v2, d1, d2);
-    f0sq = candidate_v_to_f2(v1b, v2b, d1b, d2b);
-
-    if isempty(f1sq) && isempty(f0sq), f = []; return; end
-    if isempty(f1sq), f = sqrt(max(f0sq, 0)); return; end
-    if isempty(f0sq), f = sqrt(max(f1sq, 0)); return; end
-
-    % --- Correct geometric mean (Shum & Szeliski, Eq. (7)) ---
-    f = sqrt(sqrt(f1sq) * sqrt(f0sq)); %  f = √(f1 * f0)
-
-    if ~isfinite(f) || f <= 0, f = [];
-    end
-
 end
 
-function f2 = candidate_v_to_f2(v1, v2, d1, d2)
-    % CANDIDATE_V_TO_F2 Resolve focal^2 candidate from v1/v2 with denom guards.
-    %   f2 = candidate_v_to_f2(v1, v2, d1, d2)
 
-    arguments
-        v1 (1, 1) double {mustBeFinite}
-        v2 (1, 1) double {mustBeFinite}
-        d1 (1, 1) double {mustBeFinite}
-        d2 (1, 1) double {mustBeFinite}
-    end
+% Build intrinsic matrix
+function K = buildIntrinsicMatrix(f, imageSize)
+    cx = imageSize(2) / 2;
+    cy = imageSize(1) / 2;
+    K = [f, 0, cx; 
+         0, f, cy; 
+         0, 0, 1];
+end
 
-    % Implements the v1/v2 selection with denominator guards
-    f2 = []; %#ok<NASGU>
-    % guard tiny denominators
-    tol = 1e-12;
-    use1 = abs(d1) > tol; if use1, v1 = v1 / d1; else, v1 = -Inf; end
-    use2 = abs(d2) > tol; if use2, v2 = v2 / d2; else, v2 = -Inf; end
-
-    % put larger one in v1 as in your code
-    if v1 < v2, tmp = v1; v1 = v2; v2 = tmp; end
-
-    if v1 > 0 && v2 > 0
-        % choose by larger denominator magnitude
-        if abs(d1) > abs(d2), f2 = v1; else, f2 = v2; end
-    elseif v1 > 0
-        f2 = v1;
+% Extract Euler angles from rotation matrix
+function [yaw, pitch, roll] = extractEulerAngles(R)
+    % ZYX Euler convention
+    sy = sqrt(R(1,1)^2 + R(2,1)^2);
+    
+    if sy > 1e-6
+        yaw = atan2(R(3,2), R(3,3));
+        pitch = atan2(-R(3,1), sy);
+        roll = atan2(R(2,1), R(1,1));
     else
-        f2 = [];
+        yaw = atan2(-R(2,3), R(2,2));
+        pitch = atan2(-R(3,1), sy);
+        roll = 0;
     end
-
 end
 
-function Hn = center_and_normalize_H(H, Wi, Hi, Wj, Hj)
-    % CENTER_AND_NORMALIZE_H Center H (j->i) and normalize determinant to 1.
-    %   Hn = center_and_normalize_H(H, Wi, Hi, Wj, Hj)
-
-    arguments
-        H (3, 3) double {mustBeFinite}
-        Wi (1, 1) double {mustBeFinite, mustBePositive}
-        Hi (1, 1) double {mustBeFinite, mustBePositive}
-        Wj (1, 1) double {mustBeFinite, mustBePositive}
-        Hj (1, 1) double {mustBeFinite, mustBePositive}
-    end
-
-    % Column-form H (j->i). Returns centered (Ci^{-1} H Cj) and det-normalized.
-
-    Ci = [1 0 Wi / 2; 0 1 Hi / 2; 0 0 1];
-    Cj = [1 0 Wj / 2; 0 1 Hj / 2; 0 0 1];
-
-    Hc = (Ci \ H) * Cj;
-
-    d = det(Hc);
-    if ~isfinite(d) || d == 0, Hn = []; return; end
-
-    s = sign(d) * nthroot(abs(d), 3);
-    Hn = Hc / s;
-end
-
+% 
 function Hji = getHomog_j_to_i(input, pair, imageSizes, initialTforms) %#ok<INUSD>
     % GETHOMOG_J_TO_I Obtain j->i homography (column form) from inputs or estimates.
     %   Hji = getHomog_j_to_i(input, pair, imageSizes, initialTforms)
@@ -1797,8 +1309,10 @@ function Hji = getHomog_j_to_i(input, pair, imageSizes, initialTforms) %#ok<INUS
     end
 
     % Fallback: estimate from matches (return column-form j->i)
-    if isempty(Hji) && size(pair.Ui, 1) >= 4
-
+    if isempty(Hji) && isfield(pair,'Ui') && isfield(pair,'Uj') ...
+       && ~isempty(pair.Ui) && ~isempty(pair.Uj) ...
+       && size(pair.Ui,1) >= 4 && size(pair.Uj,1) >= 4
+        disp('XXXXXXXXXXXXXXXXXX Estimate from matches XXXXXXXXXXXXXXXXXXX')
         try
 
             if input.useMATLABImageMatching == 1
@@ -1869,6 +1383,7 @@ function Hji = getHomog_j_to_i(input, pair, imageSizes, initialTforms) %#ok<INUS
 
 end
 
+%
 function R = projectToSO3(M)
     % PROJECTTOSO3 Project a matrix to the closest proper rotation via SVD.
     %   R = projectToSO3(M)
