@@ -73,13 +73,6 @@ input.verboseLM = false;
 input.focalEstimateMethod = 'wConstraint'; % 'shumSzeliski' (sometimes unstable)
                                            %  'wConstraint' (stable)
                                            %  'shumSzeliskiOneH' (sometimes unstable)
-input.UseFocalSoftPrior = false; % off = paper
-input.UseFocalSprings = false; % off = paper
-input.UseIterFocalCenter = false; % off = paper (use fixed center if you still keep a prior)
-input.ClipLogFStep = true; % off = paper
-input.BrownLoweDamping = true; % off = paper (use lambda * I or diag(H))
-input.PredUsesUndampedH = false; % off = paper (use the same matrix you solved)
-input.FixSeedFocal = true; % paper often doesn't pin f; keep only rotation pin
 
 % Gain compensation
 input.gainCompensation = 1; % 1 - on | 2 - off
