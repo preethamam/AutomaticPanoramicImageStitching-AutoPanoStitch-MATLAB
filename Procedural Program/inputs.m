@@ -18,7 +18,7 @@ end
 
 % Folder name that consists of the images set
 folderName = '';
-input.imageSaveFolder = 'F:\Datasets\AutoPanoStitch';
+input.imageSaveFolder = '..\..\..\..\..\..\Team Work\Team CrackSTITCH\Results\AutoPanoStitch\Spherical';
 
 %% Inputs 2
 %--------------------------------------------------------------------------
@@ -44,7 +44,7 @@ input.Matchingmethod = 'Approximate'; % 'Exhaustive' (default) | 'Approximate'
 input.ApproxFloatNNMethod = 'subset_pdist2'; % Nearset neighbor finding methods: 'pca_2nn' 'subset_pdist2'; 'kdtree'
                                                                             % Speed: fast | slow | super slow
                                                                             % Accuracy: ordinary | very accurate | very accurate
-input.Matchingthreshold = 3.5; % 10.0 or 1.0 (default) | percent value in the range (0, 100] | depends on
+input.Matchingthreshold = 1.5; % 10.0 or 1.0 (default) | percent value in the range (0, 100] | depends on
 
 % binary and non-binary features. Default: 3.5. Increase this to >= 10 for binary features
 input.Ratiothreshold = 0.6; % ratio in the range (0,1]
@@ -54,12 +54,12 @@ input.ApproxProbes = 8;
 
 % Image matching (RANSAC/MLESAC)            MLESAC - recommended
 input.useMATLABImageMatching = 0; % Use MATLAB default estgeotform2d function: 0-off | 1-on
-input.imageMatchingMethod = 'mlesac'; % 'ransac' | 'mlesac'. RANSAC or MLESAC. Both gives consistent matches.
+input.imageMatchingMethod = 'ransac'; % 'ransac' | 'mlesac'. RANSAC or MLESAC. Both gives consistent matches.
 % MLESAC - recommended. As it has some tight bounds and validation checks.
 
 % RANSAC execution time for projective case is ~1.35 times higher than MLESAC.
-input.maxIter = 2500; % RANSAC/MLESAC maximum iterations
-input.maxDistance = 1.5; % Maximum distance (pixels) increase this to get more matches. Default: 1.5
+input.maxIter = 500; % RANSAC/MLESAC maximum iterations
+input.maxDistance = 3.5; % Maximum distance (pixels) increase this to get more matches. Default: 1.5
 % For large image RANSAC/MLESAC requires maxDistance 1-3 pixels
 % more than the default value of 1.5 pixels.
 input.inliersConfidence = 99.9; % Inlier confidence [0, 100]
@@ -70,9 +70,9 @@ input.maxIterLM = 30;
 input.lambda = 1e-3;
 input.sigmaHuber = 2.0;
 input.verboseLM = false;
-input.focalEstimateMethod = 'wConstraint'; % 'shumSzeliski' (sometimes unstable)
+input.focalEstimateMethod = 'shumSzeliskiOneHPaper'; % 'shumSzeliski' (sometimes unstable lesser values)
                                            %  'wConstraint' (stable)
-                                           %  'shumSzeliskiOneH' (sometimes unstable)
+                                           %  'shumSzeliskiOneHPaper' (stable)
 
 % Gain compensation
 input.gainCompensation = 1; % 1 - on | 2 - off
@@ -81,14 +81,14 @@ input.sigmag = 0.1; % Standard deviations of the gain
 
 % Blending
 input.blending = 'multiband'; % 'multiband' | 'linear' | 'none'
-input.bands = 2; % bands (2 - 6 is enough)
+input.bands = 3; % bands (2 - 6 is enough)
 input.MBBsigma = 1; % Multi-band Gaussian sigma
 
 % Rendering panorama
 input.resizeImage = 1; % Resize input images
 input.resizeStitchedImage = 0; % Resize stitched image
 input.panorama2DisplaynSave = ... % "planar" | "cylindrical" | "spherical" | "equirectangular" | "stereographic" | Use:[]
-"cylindrical"; %["planar", "cylindrical", "spherical", ...
+"spherical"; %["planar", "cylindrical", "spherical", ...
                %"equirectangular", "stereographic"];
 
 % Post-processing
@@ -96,8 +96,8 @@ input.canvas_color = 'black'; % Panorama canvas color 'black' | 'white'
 input.blackRange = 0; % Minimum dark pixel value to crop panaroma
 input.whiteRange = 250; % Minimum bright pixel value to crop panaroma
 input.showKeypointsPlot = 0; % Display keypoints plot (parfor suppresses this flag, so no use)
-input.displayPanoramas = false; % Display panoramas in figure
+input.displayPanoramas = true; % Display panoramas in figure
 input.showPanoramaImgsNums = false; % Display the panorama images with numbers after tranform 0 or 1
 input.showCropBoundingBox = false; % Display cropping bounding box 0 | 1
 input.cropPanorama = false; % Write panorama image to disk 0 | 1
-input.imageWrite = true; % Write panorama image to disk 0 | 1
+input.imageWrite = false; % Write panorama image to disk 0 | 1

@@ -42,7 +42,7 @@ function [panorama, rgbAnnotation] = renderPanorama(images, imgSize, cameras, mo
     if ~isfield(opts, 'res_scale'), opts.res_scale = 1.0; end % Resolution scale factor
     if ~isfield(opts, 'angle_power'), opts.angle_power = 1; end % View-angle weight power
     if ~isfield(opts, 'crop_border'), opts.crop_border = true; end % Crop black border
-    if ~isfield(opts, 'margin'), opts.margin = 0.05; end % Margin fraction on bounds
+    if ~isfield(opts, 'margin'), opts.margin = 0.01; end % Margin fraction on bounds
     if ~isfield(opts, 'use_gpu'), opts.use_gpu = true; end % Use GPU if available
     if ~isfield(opts, 'parfor'), opts.parfor = true; end % Use parfor for tiling
     if ~isfield(opts, 'tile'), opts.tile = []; end % [tileH tileW] or []
@@ -203,11 +203,10 @@ function [panorama, rgbAnnotation] = renderPanorama(images, imgSize, cameras, mo
             error('mode must be cylindrical, spherical, or planar/perspective');
     end
 
-
     % Choose device
     onGPU = opts.use_gpu && (gpuDeviceCount > 0);
 
-    % Check for panorama size and if the projection is strange    
+    % Check for panorama size and if the projection is strange
     panorama = [];
     rgbAnnotation = [];
 
@@ -871,6 +870,11 @@ function tf = canFit(bytes_needed, onGPU)
     % - bytes_needed: required bytes.
     % - onGPU: true=GPU, false=CPU (default false).
     % Returns true if allocation is likely to fit (best-effort).
+    arguments
+        bytes_needed (1, 1) {mustBeNumeric, mustBeFinite, mustBeNonnegative}
+        onGPU (1, 1) logical = false
+    end
+
     if onGPU
 
         try
@@ -909,6 +913,12 @@ function s = tern(cond, a, b)
     % Examples:
     % - s = tern(true, 1, 2)              % returns 1
     % - s = tern([true false], 10, [1 2]) % returns [10 2]
+    arguments
+        cond {mustBeNumericOrLogical}
+        a
+        b
+    end
+
     if cond
         s = a;
     else

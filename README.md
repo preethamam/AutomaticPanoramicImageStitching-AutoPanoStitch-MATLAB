@@ -1,8 +1,8 @@
-# AutoPanoStitch
+# AutoPanoStitch: An automatic panorama stitching MATLAB package
 
 [![View Automatic panorama stitcher (AutoPanoStitch) on File Exchange](https://www.mathworks.com/matlabcentral/images/matlab-file-exchange.svg)](https://www.mathworks.com/matlabcentral/fileexchange/105850-automatic-panorama-stitcher-autopanostitch) [![Open in MATLAB Online](https://www.mathworks.com/images/responsive/global/open-in-matlab-online.svg)](https://matlab.mathworks.com/open/github/v1?repo=preethamam/AutomaticPanoramicImageStitching-AutoPanoStitch-MATLAB)
 
-AutoPanoStitch is an automatic panorama stitching package for MATLAB that detects and matches local features (e.g., SIFT, SURF, ORB), estimates transformations via RANSAC/MLESAC, and refines camera parameters with bundle adjustment. It supports planar, cylindrical, spherical, equirectangular (360x180), and stereographic projections, can identify multiple panoramas in a set, and uses gain compensation and multiband blending for seamless composites. The pipeline is parallel-ready and highly configurable to balance speed and accuracy, with a simple entry script (main.m) and sample datasets to help you get started quickly.
+AutoPanoStitch is an automatic panorama stitching package which is native to MATLAB that detects and matches local features (e.g., SIFT, vl_SIFT, SURF, ORB, HARRIS, FAST, SURF, BRISK, ORB and KAZE), estimates transformations via RANSAC/MLESAC, and refines camera parameters with bundle adjustment. It supports planar, cylindrical, spherical, equirectangular (360x180), and stereographic projections, can identify multiple panoramas in a set, and uses gain compensation and multiband blending for seamless composites. The pipeline is parallel-ready and highly configurable to balance speed and accuracy, with a simple entry script (main.m) and sample datasets to help you get started quickly. AutoPanoStitch mainly follows the routine described in the paper [Automatic Panoramic Image Stitching using Invariant Features](https://link.springer.com/article/10.1007/s11263-006-0002-3) by Brown and Lowe, which is also used by [AutoStitch](https://matthewalunbrown.com/autostitch/autostitch.htm) and many other commercial image stitching software. AutoPanoStitch routines are written from scratch except keypoints extractors. Although native to the MATLAB, most of the routines are optimized to speedup gains.
 
 # Stitched images 1:
 
@@ -57,7 +57,7 @@ input.Matchingmethod = 'Approximate'; % 'Exhaustive' (default) | 'Approximate'
 input.ApproxFloatNNMethod = 'subset_pdist2'; % Nearset neighbor finding methods: 'pca_2nn' 'subset_pdist2'; 'kdtree'
                                                                             % Speed: fast | slow | super slow
                                                                             % Accuracy: ordinary | very accurate | very accurate
-input.Matchingthreshold = 3.5; % 10.0 or 1.0 (default) | percent value in the range (0, 100] | depends on
+input.Matchingthreshold = 1.5; % 10.0 or 1.0 (default) | percent value in the range (0, 100] | depends on
 
 % binary and non-binary features. Default: 3.5. Increase this to >= 10 for binary features
 input.Ratiothreshold = 0.6; % ratio in the range (0,1]
@@ -72,7 +72,7 @@ input.imageMatchingMethod = 'ransac'; % 'ransac' | 'mlesac'. RANSAC or MLESAC. B
 
 % RANSAC execution time for projective case is ~1.35 times higher than MLESAC.
 input.maxIter = 500; % RANSAC/MLESAC maximum iterations
-input.maxDistance = 2.5; % Maximum distance (pixels) increase this to get more matches. Default: 1.5
+input.maxDistance = 3.5; % Maximum distance (pixels) increase this to get more matches. Default: 1.5
 % For large image RANSAC/MLESAC requires maxDistance 1-3 pixels
 % more than the default value of 1.5 pixels.
 input.inliersConfidence = 99.9; % Inlier confidence [0, 100]
@@ -83,9 +83,9 @@ input.maxIterLM = 30;
 input.lambda = 1e-3;
 input.sigmaHuber = 2.0;
 input.verboseLM = false;
-input.focalEstimateMethod = 'wConstraint'; % 'shumSzeliski' (sometimes unstable)
+input.focalEstimateMethod = 'shumSzeliskiOneHPaper'; % 'shumSzeliski' (sometimes unstable lesser values)
                                            %  'wConstraint' (stable)
-                                           %  'shumSzeliskiOneH' (sometimes unstable)
+                                           %  'shumSzeliskiOneHPaper' (stable)
 
 % Gain compensation
 input.gainCompensation = 1; % 1 - on | 2 - off
@@ -94,15 +94,15 @@ input.sigmag = 0.1; % Standard deviations of the gain
 
 % Blending
 input.blending = 'multiband'; % 'multiband' | 'linear' | 'none'
-input.bands = 2; % bands (2 - 6 is enough)
+input.bands = 3; % bands (2 - 6 is enough)
 input.MBBsigma = 1; % Multi-band Gaussian sigma
 
 % Rendering panorama
 input.resizeImage = 1; % Resize input images
 input.resizeStitchedImage = 0; % Resize stitched image
 input.panorama2DisplaynSave = ... % "planar" | "cylindrical" | "spherical" | "equirectangular" | "stereographic" | Use:[]
-"spherical"; %      ["planar", "cylindrical", "spherical" ...
-% "equirectangular", "stereographic"];
+"spherical"; %["planar", "cylindrical", "spherical", ...
+               %"equirectangular", "stereographic"];
 
 % Post-processing
 input.canvas_color = 'black'; % Panorama canvas color 'black' | 'white'
@@ -141,7 +141,14 @@ Below are some samples from the datasets. There are 100+ `panorama` or `image st
 
 ## Known issues
 
-Long, chain-like 1D and 2D sequences (typically more than 10–12 images) may fail to stitch reliably because global bundle adjustment can diverge or settle in poor minima as drift accumulates; moreover, the current bundle adjustment implementation is not optimized and can be slow, with runtime increasing noticeably as the number of images grows. In practice, sequences with fewer than 10–12 images generally stitch well. As a workaround, consider stitching in smaller batches and merging results, ensuring strong image overlap, or running without bundle adjustment for quick previews.
+1. Incremental bundle adjustment is slow for a very large image sets. Note that AutoStitch's bundler is the most fastest.
+2. Native implementation of feature matching for non-binary (SIFT, SURF, etc.) and non-binary (ORB, BRISK, etc.) is slow when compared to the MATLAB's `matchFeatures`. However, one can select the default MATLAB's `matchFeatures` in the input file.
+3. Long, chain-like 1D and 2D sequences (typically more than 10–12 images) may fail to stitch reliably because global bundle adjustment can diverge or settle in poor minima as drift accumulates due to the poor initialization of R, K and f; moreover, the current bundle adjustment implementation is not optimized and can be slow, with runtime increasing noticeably as the number of images grows. In practice, sequences with fewer than 10–12 images generally stitch well. As a workaround, consider stitching in smaller batches and merging results, ensuring strong image overlap, or running without bundle adjustment for quick previews.
+
+## Version history
+
+* [AutoPanoStitch release 3.0.0](https://github.com/preethamam/AutomaticPanoramicImageStitching-AutoPanoStitch-MATLAB/releases) and later releases: Bundle adjustment optimization was performed to solve for all of the camera parameters, [θ1,θ2,θ3,f], jointly.
+* [AutoPanoStitch release 2.9.2](https://github.com/preethamam/AutomaticPanoramicImageStitching-AutoPanoStitch-MATLAB/releases/tag/2.9.2) and earlier releases: Bundle adjustment optimization was performed on the homography matrix.
 
 ## Citation
 

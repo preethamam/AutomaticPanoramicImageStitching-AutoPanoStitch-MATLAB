@@ -18,7 +18,7 @@ function [bundlerTformsAll, finalrefIdxsAll, panoIndices, concomps, panaromaCCs,
     % Inputs
     %   input            - Struct of algorithm parameters used by bundleAdjustmentLM.
     %                      Expected fields: maxIterLM, lambda, sigmaHuber, verboseLM.
-    %   numMatches       - N-by-N upper-triangular (or symmetric) numeric matrix with
+    %   numMatchesAll    - N-by-N upper-triangular (or symmetric) numeric matrix with
     %                      the number of inlier matches between image i and j. Only
     %                      the upper triangle is interpreted when constructing the graph.
     %   matchesAll       - N-by-N cell array of match information for each image pair.
@@ -115,8 +115,10 @@ function [bundlerTformsAll, finalrefIdxsAll, panoIndices, concomps, panaromaCCs,
     numMatchesG = graph(numMatchesAll, 'upper');
     [concomps, ccBinSizes] = conncomp(numMatchesG);
     panaromaCCsAll = find(ccBinSizes >= 1);
-    panaromaCCs = find(ccBinSizes > 1);
+    panaromaCCs = find(ccBinSizes > 1);    
     connCompsNumber = numel(panaromaCCsAll);
+
+    fprintf('Found %i panorama images set(s).\n', numel(panaromaCCs));
 
     % Initialize
     bundlerTformsAll = cell(numel(panaromaCCs), 1);

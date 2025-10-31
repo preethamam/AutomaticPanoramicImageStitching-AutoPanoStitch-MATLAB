@@ -1,9 +1,91 @@
-%--------------------------------------------------------------------------
-% Camera parameters estimation functions
-%--------------------------------------------------------------------------
 function cameras = initializeCameraMatrices(input, pairs, imageSizes, initialTforms, seed, num_images)
     % INITIALIZECAMERAMATRICES Build initial camera struct array (K,R,f,initialized).
+    %INITIALIZECAMERAMATRICES Initialize per-image camera matrices for panorama stitching.
+    %   CAMERAS = INITIALIZECAMERAMATRICES(INPUT, PAIRS, IMAGESIZES, INITIALTFORMS, SEED, NUM_IMAGES)
+    %   builds an initial set of camera intrinsics and extrinsics for a set of
+    %   images connected by pairwise geometric transforms. The result is suitable
+    %   as a starting point for global pose refinement (e.g., bundle adjustment)
+    %   in an automatic panorama stitching pipeline.
+    %
+    % Syntax
     %   cameras = initializeCameraMatrices(input, pairs, imageSizes, initialTforms, seed, num_images)
+    %
+    % Description
+    %   The function constructs a view graph from PAIRS and propagates relative
+    %   transforms in INITIALTFORMS from a chosen SEED view to all reachable views.
+    %   Intrinsic parameters are initialized from INPUT and IMAGESIZES (or set to
+    %   sensible defaults), and per-view extrinsics (rotation/translation) are
+    %   composed to express each camera pose in the seed frame. The output is a
+    %   per-image collection of camera matrices/parameters for subsequent global
+    %   optimization and warping.
+    %
+    % Inputs
+    %   input          - Structure or object with initialization options. Typical
+    %                    fields may include:
+    %                      • Intrinsics (cameraParameters, K, focal length/FOV)
+    %                      • Normalization/centering options
+    %                      • Projection model ('planar','cylindrical','spherical')
+    %                      • Reference view policy and scale settings
+    %                    If empty, reasonable defaults are used.
+    %   pairs          - M-by-2 array of image indices describing the adjacency
+    %                    graph; each row [i j] denotes a relation between images i
+    %                    and j for which a relative transform is provided.
+    %   imageSizes     - NUM_IMAGES-by-2 array of [height width] for each image.
+    %   initialTforms  - Collection of pairwise transforms relating images in PAIRS.
+    %                    Supported forms typically include:
+    %                      • M-by-1 cell array of projective2d/affine2d objects
+    %                        where initialTforms{k} maps points from image j to i
+    %                        for PAIRS(k,:) = [i j].
+    %                      • or a struct/map keyed by pairs with corresponding
+    %                        3x3 homographies (up to scale).
+    %   seed           - Scalar index of the seed (reference) image used as the
+    %                    origin of the pose graph. The seed view is assigned
+    %                    identity rotation and zero translation.
+    %   num_images     - Total number of images/views in the panorama.
+    %
+    % Output
+    %   cameras        - NUM_IMAGES-by-1 container of per-image camera parameters.
+    %                    The exact type depends on the implementation; commonly a
+    %                    struct array with fields such as:
+    %                      • K  (3x3) Intrinsic calibration matrix
+    %                      • R  (3x3) Rotation from world to camera
+    %                      • t  (3x1) Translation of camera center in world coords
+    %                      • P  (3x4) Projection matrix P = K * [R | t]
+    %                      • ImageSize ([H W]) Original image size
+    %                      • Id (scalar) Image index
+    %                    Entries corresponding to images unreachable from SEED
+    %                    may be empty or omitted.
+    %
+    % Notes
+    %   - The function traverses the view graph induced by PAIRS starting at SEED
+    %     and composes INITIALTFORMS to express each view relative to the seed.
+    %   - If the view graph is disconnected or required transforms are missing,
+    %     an error is thrown or unreachable views are left uninitialized.
+    %   - Intrinsics are estimated from INPUT and IMAGESIZES; if not provided,
+    %     focal lengths may be initialized heuristically (e.g., using image
+    %     diagonal and an assumed field of view).
+    %   - Use the returned CAMERAS as initialization for global refinement such as
+    %     bundleAdjustment or nonlinear homography optimization.
+    %
+    % Example
+    %   % Example data
+    %   pairs       = [1 2; 2 3; 3 4];
+    %   imageSizes  = repmat([1080 1920], 4, 1);
+    %   initialTforms = {
+    %       projective2d(eye(3));
+    %       projective2d(eye(3));
+    %       projective2d(eye(3))};
+    %   seed        = 2;
+    %   num_images  = 4;
+    %
+    %   % Initialization options (intrinsics, projection model, etc.)
+    %   input = struct('Projection','planar');  % add fields as needed
+    %
+    %   % Build initial camera matrices
+    %   cameras = initializeCameraMatrices(input, pairs, imageSizes, initialTforms, seed, num_images);
+    %
+    % See also
+    %   projective2d, affine2d, estimateGeometricTransform2D, viewSet, bundleAdjustment
 
     arguments
         input (1, 1) struct
@@ -34,7 +116,7 @@ function cameras = initializeCameraMatrices(input, pairs, imageSizes, initialTfo
     cameras = cameras'; % now 1×N instead of N×1
 end
 
-%
+
 function [K, R, f_used] = initializeKRf(input, pairs, imageSizes, num_images, seed, initialTforms)
     % INITIALIZEKRF Initialize intrinsics K, rotations R and focal(s) from H list.
     %   [K,R,f_used] = initializeKRf(input, pairs, imageSizes, num_images, seed, initialTforms)
@@ -246,7 +328,7 @@ function [K, R, f_used] = initializeKRf(input, pairs, imageSizes, num_images, se
                          'Therefore, using the max(h,w) x 0.8 | f used: %.4f\n'], input.transformationType, f_used);
             end
 
-        case 'shumSzeliskiOneH'
+        case 'shumSzeliskiOneHPaper'
             % ----- Build Hlist (store i->j in column form) -----
             E = 0; Hlist = struct('i', {}, 'j', {}, 'H', {});
 
@@ -289,7 +371,7 @@ function [K, R, f_used] = initializeKRf(input, pairs, imageSizes, num_images, se
 
             % Optional: also consider the opposite direction for robustness
             Hc_both = [Hc, cellfun(@inv, Hc, 'UniformOutput', false)];
-            fvec = arrayfun(@(tform) focal_from_H_shum_szeliski_unnormalized(tform), Hc_both);
+            fvec = arrayfun(@(tform) focal_from_H_shumsz_paper(tform), Hc_both);
 
             % Keep valid, robust-aggregate
             fvec = fvec(isfinite(fvec) & fvec > 0);
@@ -299,7 +381,7 @@ function [K, R, f_used] = initializeKRf(input, pairs, imageSizes, num_images, se
                 fprintf('Estimated focal length Shum–Szeliski (single homography H): %.4f px\n', f_used);
             else
                 % Fallback: 0.8*max(h,w) per image -> global median
-                f_fallback = 0.8 * max(imageSizes, [], 2); % N×1
+                f_fallback = 0.8*max(imageSizes, [], 2); % N×1
                 f_used = median(f_fallback);
                 fprintf(['Cannot estimate focal lengths, %s motion model is used! ', ...
                          'Therefore, using the max(h,w) x 0.8 | f used: %.4f\n'], ...
@@ -385,7 +467,8 @@ function [K, R, f_used] = initializeKRf(input, pairs, imageSizes, num_images, se
     R{seed} = eye(3);
 end
 
-function f = focal_from_H_shum_szeliski_unnormalized(h)
+
+function f = focal_from_H_shumsz_paper(h)
     % FOCAL_FROM_H_SHUM_SZELISKI_UNNORMALIZED Estimate focal from one unnormalized H.
     %   f = focal_from_H_shum_szeliski_unnormalized(hCell)
     %   hCell should be a 1x1 cell containing a 3x3 homography matrix.
@@ -709,4 +792,3 @@ function R = projectToSO3(M)
     [U, ~, V] = svd(M);
     R = U * diag([1, 1, sign(det(U * V'))]) * V';
 end
-

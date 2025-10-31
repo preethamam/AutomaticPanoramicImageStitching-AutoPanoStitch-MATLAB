@@ -5,7 +5,7 @@
 %//%*                    Name: Dr. Preetham Manjunatha                      *%
 %//%*               GitHub: https://github.com/preethamam	                *%
 %//%*                   Repo Name: AutoPanoStitch                           *%
-%//%*                    Rewritten Date: 10/26/2026                         *%
+%//%*                    Rewritten Date: 10/31/2025                         *%
 %%***************************************************************************%
 %* Citation 1: Automatic Panoramic Image Stitching using Invariant Features.*%
 %* M. Brown and D. Lowe. International Journal of Computer Vision. 74(1),   *%
@@ -61,7 +61,7 @@ foldersLen = length(datasetName);
 %--------------------------------------------------------------------------
 % Stitches panoramas
 %--------------------------------------------------------------------------
-for myImg = 39:foldersLen
+for myImg = 120 %1:foldersLen
     stitchStart = tic;
     fprintf('Image number: %i | Current folder: %s\n', myImg, imgFolders(myImg).name);
 
