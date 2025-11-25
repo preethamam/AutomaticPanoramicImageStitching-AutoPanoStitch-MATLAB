@@ -7,9 +7,9 @@ function croppedImage = panoramaCropper(input, stitchedImage)
     %
     %   Inputs
     %   - input: struct with fields:
-    %       canvas_color        - "black" or "white" background for empty canvas.
-    %       blackRange          - Scalar in [0,255] threshold when canvas_color = "black".
-    %       whiteRange          - Scalar in [0,255] threshold when canvas_color = "white".
+    %       canvasColor        - "black" or "white" background for empty canvas.
+    %       blackRange          - Scalar in [0,255] threshold when canvasColor = "black".
+    %       whiteRange          - Scalar in [0,255] threshold when canvasColor = "white".
     %       showCropBoundingBox - logical flag to visualize crop rectangle.
     %       displayPanoramas    - logical flag that controls interactive display.
     %   - stitchedImage: M-by-N-by-3 numeric RGB image to crop.
@@ -32,7 +32,7 @@ function croppedImage = panoramaCropper(input, stitchedImage)
     end
 
     % Validate required fields and values in input struct
-    reqFields = ["canvas_color", "blackRange", "whiteRange", "showCropBoundingBox", "displayPanoramas"];
+    reqFields = ["canvasColor", "blackRange", "whiteRange", "showCropBoundingBox", "displayPanoramas"];
     missing = reqFields(~isfield(input, reqFields));
 
     if ~isempty(missing)
@@ -40,11 +40,11 @@ function croppedImage = panoramaCropper(input, stitchedImage)
             'Missing required input fields: %s', strjoin(missing, ', '));
     end
 
-    canvasColor = lower(string(input.canvas_color));
+    canvasColor = lower(string(input.canvasColor));
 
     if ~(canvasColor == "black" || canvasColor == "white")
         error('panoramaCropper:InvalidCanvasColor', ...
-        'input.canvas_color must be "black" or "white".');
+        'input.canvasColor must be "black" or "white".');
     end
 
     if ~(isscalar(input.blackRange) && isnumeric(input.blackRange) && isfinite(input.blackRange) && input.blackRange >= 0 && input.blackRange <= 255)
@@ -85,11 +85,11 @@ function croppedImage = panoramaCropper(input, stitchedImage)
     BW2 = imfill(BW, 'holes');
 
     % Canvas outer indices
-    canvas_outer_indices = BW2 == 0;
+    canvasOuterIndices = BW2 == 0;
 
     % Normalize the image to -1 and others
     stitched = double(stitchedImage);
-    stitched(repmat(canvas_outer_indices, 1, 1, 3)) = -255;
+    stitched(repmat(canvasOuterIndices, 1, 1, 3)) = -255;
     stitched = stitched / 255.0;
 
     % Get the crop indices

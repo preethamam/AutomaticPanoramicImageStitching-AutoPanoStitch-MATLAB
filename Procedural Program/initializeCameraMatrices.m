@@ -1,14 +1,15 @@
-function cameras = initializeCameraMatrices(input, pairs, imageSizes, initialTforms, seed, num_images)
+function cameras = initializeCameraMatrices(input, pairs, matches, imageSizes, initialTforms, ...
+        seed, numImages, numMatches)
     % INITIALIZECAMERAMATRICES Build initial camera struct array (K,R,f,initialized).
     %INITIALIZECAMERAMATRICES Initialize per-image camera matrices for panorama stitching.
-    %   CAMERAS = INITIALIZECAMERAMATRICES(INPUT, PAIRS, IMAGESIZES, INITIALTFORMS, SEED, NUM_IMAGES)
+    %   CAMERAS = INITIALIZECAMERAMATRICES(INPUT, PAIRS, IMAGESIZES, INITIALTFORMS, SEED, NUMIMAGES)
     %   builds an initial set of camera intrinsics and extrinsics for a set of
     %   images connected by pairwise geometric transforms. The result is suitable
     %   as a starting point for global pose refinement (e.g., bundle adjustment)
     %   in an automatic panorama stitching pipeline.
     %
     % Syntax
-    %   cameras = initializeCameraMatrices(input, pairs, imageSizes, initialTforms, seed, num_images)
+    %   cameras = initializeCameraMatrices(input, pairs, imageSizes, initialTforms, seed, numImages)
     %
     % Description
     %   The function constructs a view graph from PAIRS and propagates relative
@@ -30,7 +31,7 @@ function cameras = initializeCameraMatrices(input, pairs, imageSizes, initialTfo
     %   pairs          - M-by-2 array of image indices describing the adjacency
     %                    graph; each row [i j] denotes a relation between images i
     %                    and j for which a relative transform is provided.
-    %   imageSizes     - NUM_IMAGES-by-2 array of [height width] for each image.
+    %   imageSizes     - NUMIMAGES-by-3 array of [height width] for each image.
     %   initialTforms  - Collection of pairwise transforms relating images in PAIRS.
     %                    Supported forms typically include:
     %                      • M-by-1 cell array of projective2d/affine2d objects
@@ -41,10 +42,10 @@ function cameras = initializeCameraMatrices(input, pairs, imageSizes, initialTfo
     %   seed           - Scalar index of the seed (reference) image used as the
     %                    origin of the pose graph. The seed view is assigned
     %                    identity rotation and zero translation.
-    %   num_images     - Total number of images/views in the panorama.
+    %   numImages     - Total number of images/views in the panorama.
     %
     % Output
-    %   cameras        - NUM_IMAGES-by-1 container of per-image camera parameters.
+    %   cameras        - NUMIMAGES-by-1 container of per-image camera parameters.
     %                    The exact type depends on the implementation; commonly a
     %                    struct array with fields such as:
     %                      • K  (3x3) Intrinsic calibration matrix
@@ -76,13 +77,13 @@ function cameras = initializeCameraMatrices(input, pairs, imageSizes, initialTfo
     %       projective2d(eye(3));
     %       projective2d(eye(3))};
     %   seed        = 2;
-    %   num_images  = 4;
+    %   numImages  = 4;
     %
     %   % Initialization options (intrinsics, projection model, etc.)
     %   input = struct('Projection','planar');  % add fields as needed
     %
     %   % Build initial camera matrices
-    %   cameras = initializeCameraMatrices(input, pairs, imageSizes, initialTforms, seed, num_images);
+    %   cameras = initializeCameraMatrices(input, pairs, imageSizes, initialTforms, seed, numImages);
     %
     % See also
     %   projective2d, affine2d, estimateGeometricTransform2D, viewSet, bundleAdjustment
@@ -90,36 +91,53 @@ function cameras = initializeCameraMatrices(input, pairs, imageSizes, initialTfo
     arguments
         input (1, 1) struct
         pairs (1, :) struct
+        matches (:, :) cell
         imageSizes (:, 3) double {mustBeFinite}
         initialTforms
         seed (1, 1) double {mustBeInteger, mustBePositive, mustBeFinite}
-        num_images (1, 1) double {mustBeInteger, mustBePositive, mustBeFinite}
+        numImages (1, 1) double {mustBeInteger, mustBePositive, mustBeFinite}
+        numMatches double
     end
 
-    % You already have: pairs, imageSizes (N×2), num_images = N, and seed
-    [K, R, f_used] = initializeKRf(input, pairs, imageSizes, num_images, seed, initialTforms);
+    % You already have: pairs, imageSizes (N×2), numImages = N, and seed
+    [K, R, fUsed, H2seed, noRotation] = initializeKRf(input, pairs, matches, imageSizes, numImages, seed, initialTforms, numMatches);
 
-    K = K(:); R = R(:);
-
-    if isscalar(f_used)
-        f_vec = repmat(f_used, num_images, 1);
+    if isscalar(fUsed)
+        fVec = repmat(fUsed, numImages, 1);
     else
-        f_vec = f_used(:);
+        fVec = fUsed(:);
     end
+
+    % replicate scalar flag per camera
+    noRotVec = repmat(logical(noRotation), numImages, 1);
 
     cameras = struct( ...
-        'f', num2cell(f_vec), ...
+        'f', num2cell(fVec), ...
         'K', K(:), ...
         'R', R(:), ...
-        'initialized', num2cell(false(num_images, 1)));
+        'H2seed', H2seed(:), ... % per-camera chain homography
+        'noRotation', num2cell(noRotVec), ... % same flag in every camera
+        'initialized', num2cell(false(numImages, 1)));
 
     cameras = cameras'; % now 1×N instead of N×1
+
+    % Show rotation determinants and angles
+    if input.verboseInitRKf
+
+        for i = 1:numImages
+            fprintf('Cam %2d  |  det(R)=%.3f  |  angle=%7.2f°\n', ...
+                i, det(R{i}), ...
+                acos(max(-1, min(1, (trace(R{i}) - 1) / 2))) * 180 / pi);
+        end
+
+    end
+
 end
 
-
-function [K, R, f_used] = initializeKRf(input, pairs, imageSizes, num_images, seed, initialTforms)
+function [K, R, fUsed, H2seed, noRotation] = initializeKRf(input, pairs, matches, imageSizes, ...
+        numImages, seed, initialTforms, numMatches)
     % INITIALIZEKRF Initialize intrinsics K, rotations R and focal(s) from H list.
-    %   [K,R,f_used] = initializeKRf(input, pairs, imageSizes, num_images, seed, initialTforms)
+    %   [K,R,fUsed] = initializeKRf(input, pairs, imageSizes, numImages, seed, initialTforms)
     % initializeKRf
     % Robustly initialize intrinsics K, rotations R, and focal(s) for panorama BA.
     %
@@ -128,7 +146,7 @@ function [K, R, f_used] = initializeKRf(input, pairs, imageSizes, num_images, se
     %                    .i, .j               (image indices, i<j recommended)
     %                    .Ui (M×2), .Uj (M×2) matched pixel coords (x,y)
     %   imageSizes     : N×2 [H W]
-    %   num_images     : N
+    %   numImages     : N
     %   seed           : chosen seed image index (gauge fix)
     %   initialTforms  : [] OR either:
     %                    - cell NxN with projective2d or 3×3 H mapping j->i
@@ -137,120 +155,43 @@ function [K, R, f_used] = initializeKRf(input, pairs, imageSizes, num_images, se
     % Outputs
     %   K      : 1×N cell, K{i} = [f 0 cx; 0 f cy; 0 0 1]
     %   R      : 1×N cell, absolute rotations (w2c) with R{seed}=I
-    %   f_used : scalar if estimated globally; otherwise N×1 vector of per-image fallback focals
+    %   fUsed : scalar if estimated globally; otherwise N×1 vector of per-image fallback focals
 
     arguments
         input (1, 1) struct
         pairs (1, :) struct
+        matches (:, :) cell
         imageSizes (:, 3) double {mustBeFinite}
-        num_images (1, 1) double {mustBeInteger, mustBePositive, mustBeFinite}
+        numImages (1, 1) double {mustBeInteger, mustBePositive, mustBeFinite}
         seed (1, 1) double {mustBeInteger, mustBePositive, mustBeFinite}
-        initialTforms
+        initialTforms cell
+        numMatches double
     end
 
-    N = num_images;
+    N = numImages;
     K = cell(1, N);
     R = repmat({eye(3)}, 1, N);
 
-    % ---------- (A) Gather homographies (j->i) for all pairs ----------
-    Hlist = struct('i', {}, 'j', {}, 'H', {});
-
-    for t = 1:numel(pairs)
-        i = pairs(t).i; j = pairs(t).j;
-        Hji = getHomog_j_to_i(input, pairs(t), imageSizes, initialTforms);
-
-        if ~isempty(Hji) && all(isfinite(Hji(:))) && rank(Hji) == 3
-            Hlist(end + 1).i = i; %#ok<AGROW>
-            Hlist(end).j = j;
-            Hlist(end).H = Hji;
-        end
-
-    end
-
-    % Estimate focal lengths
+    % ---------- (A) Estimate focal lengths
     switch input.focalEstimateMethod
-        case 'shumSzeliski'
-            % ---------- (B) Estimate global focal via Shum–Szeliski over all edges ----------
-            f_cands = [];
-
-            for k = 1:numel(Hlist)
-                i = Hlist(k).i; j = Hlist(k).j; H = Hlist(k).H;
-
-                Hi = imageSizes(i, 1); Wi = imageSizes(i, 2);
-                Hj = imageSizes(j, 1); Wj = imageSizes(j, 2);
-
-                Hn = center_and_normalize_H(H, Wi, Hi, Wj, Hj);
-                if isempty(Hn), continue; end
-
-                f_ij = focal_from_H_shum_szeliski(Hn);
-
-                if ~isempty(f_ij) && isfinite(f_ij) && f_ij > 0
-                    f_cands(end + 1, 1) = f_ij; %#ok<AGROW>
-                end
-
-            end
-
-            % Robust aggregation + plausibility clamp
-            haveFocal = ~isempty(f_cands);
-
-            if haveFocal
-                base = median(max(imageSizes(:,1:2),[],2));
-                f_lo = 0.3 * base; % generous lower bound
-                f_hi = 6.0 * base; % generous upper bound
-
-
-                % MAD trim
-                medf = median(f_cands);
-                madf = mad(f_cands, 1);
-
-                if madf == 0
-                    keep = abs(f_cands - medf) <= 1e-6 * max(1, medf);
-                else
-                    keep = abs(f_cands - medf) <= 3 * madf;
-                end
-
-                f_cands = f_cands(keep);
-                f_cands = f_cands(f_cands >= f_lo & f_cands <= f_hi);
-
-                if isempty(f_cands)
-                    haveFocal = false;
-                else
-                    f_used = median(f_cands);
-
-                    if exist('f_used','var') && isscalar(f_used)
-                        if f_used < 0.7*base || f_used > 6.0*base
-                            f_used = 0.8*base;
-                            fprintf('Clamped initial focal to %.1f px (bootstrap guard)\n', f_used);
-                        end
-                    end
-                                   
-                    fprintf('Estimated focal length (Shum–Szeliski, robust): %.4f pixels\n', f_used);
-                end
-
-            end
-
-            if ~haveFocal
-                % ---------- (C) Fallback focal(s): 0.8 * max(H,W) per image ----------
-                f_fallback = 0.8 * max(imageSizes, [], 2); % N×1
-                f_used = median(f_fallback);
-                fprintf(['Cannot estimate focal lengths, %s motion model is used! ', ...
-                         'Therefore, using the max(h,w) x 0.8 | f used: %.4f\n'], input.transformationType, f_used);
-            end
-
         case 'wConstraint'
             % ---------- (B) Estimate global focal from homographies ----------
             ws = []; % collect positive candidates for w = 1/f^2
 
-            for k = 1:numel(Hlist)
-                i = Hlist(k).i;
-                H = Hlist(k).H;
+            for k = 1:numel(pairs)
+                i = pairs(k).i;
+                j = pairs(k).j;
+                H = pairs(k).Hij;
 
                 % i, j are the images in H = H(j->i)
                 Hi = imageSizes(i, 1); Wi = imageSizes(i, 2);
                 Hj = imageSizes(j, 1); Wj = imageSizes(j, 2);
 
-                Ci = [1 0 Wi / 2; 0 1 Hi / 2; 0 0 1]; % principal shift for i
-                Cj = [1 0 Wj / 2; 0 1 Hj / 2; 0 0 1]; % principal shift for j
+                [cxi, cyi] = ppCenter(Wi, Hi);
+                [cxj, cyj] = ppCenter(Wj, Hj);
+
+                Ci = [1 0 cxi; 0 1 cyi; 0 0 1]; % principal shift for i
+                Cj = [1 0 cxj; 0 1 cyj; 0 0 1]; % principal shift for j
 
                 Hc = Ci \ H * Cj; % **correct**: Ci^{-1} * H * Cj
 
@@ -300,20 +241,20 @@ function [K, R, f_used] = initializeKRf(input, pairs, imageSizes, num_images, se
 
                 % Convert to f candidates and clamp to plausible range
                 if haveFocal
-                    f_cands = 1 ./ sqrt(ws);
+                    fCands = 1 ./ sqrt(ws);
 
                     % plausible focal band relative to image sizes
                     base = median(max(imageSizes, [], 2)); % typical "longer side"
-                    f_lo = 0.3 * base; % generous low bound
-                    f_hi = 6.0 * base; % generous high bound
+                    fLo = 0.3 * base; % generous low bound
+                    fHi = 6.0 * base; % generous high bound
 
-                    f_cands = f_cands(isfinite(f_cands) & f_cands >= f_lo & f_cands <= f_hi);
+                    fCands = fCands(isfinite(fCands) & fCands >= fLo & fCands <= fHi);
 
-                    if isempty(f_cands)
+                    if isempty(fCands)
                         haveFocal = false;
                     else
-                        f_used = median(f_cands); % robust pick
-                        fprintf('Estimated focal length (robust): %.4f pixels\n', f_used);
+                        fUsed = median(fCands); % robust pick
+                        fprintf('Estimated focal length (robust): %.4f pixels\n', fUsed);
                     end
 
                 end
@@ -322,160 +263,384 @@ function [K, R, f_used] = initializeKRf(input, pairs, imageSizes, num_images, se
 
             if ~haveFocal
                 % ---------- (C) Fallback focal(s): 0.8 * max(H,W) per image ----------
-                f_fallback = 0.8 * max(imageSizes, [], 2); % N×1
-                f_used = median(f_fallback); % vector
+                fFallback = 0.8 * max(imageSizes, [], 2); % N×1
+                fUsed = median(fFallback); % vector
                 fprintf(['Cannot estimate focal lengths, %s motion model is used! ', ...
-                         'Therefore, using the max(h,w) x 0.8 | f used: %.4f\n'], input.transformationType, f_used);
+                         'Therefore, using the max(h,w) x 0.8 | f used: %.4f pixels\n'], input.transformationType, fUsed);
             end
 
         case 'shumSzeliskiOneHPaper'
-            % ----- Build Hlist (store i->j in column form) -----
-            E = 0; Hlist = struct('i', {}, 'j', {}, 'H', {});
+            % pairs(e).H is already j->i (column-form x_i ~ H * x_j)
+            Hc = cell(1, numel(pairs));
 
-            for t = 1:numel(pairs)
-                i = pairs(t).i; j = pairs(t).j;
+            for e = 1:numel(pairs)
+                i = pairs(e).i; j = pairs(e).j;
 
-                % You already have this:
-                Hji = getHomog_j_to_i(input, pairs(t), imageSizes, initialTforms); % x_i ~ Hji * x_j
+                Hi = imageSizes(i, 1); Wi = imageSizes(i, 2);
+                Hj = imageSizes(j, 1); Wj = imageSizes(j, 2);
 
-                if ~isempty(Hji)
-                    Hij = inv(Hji); % convert to i->j: x_j ~ Hij * x_i
-                    Hij = Hij ./ Hij(3, 3); % normalize scale
-                    if det(Hij) < 0, Hij = -Hij; end % enforce det>0 (helps rotation projection)
-
-                    E = E + 1;
-                    Hlist(E).i = i;
-                    Hlist(E).j = j;
-                    Hlist(E).H = Hij; % *** store i->j ***
-                end
-
+                % Center and determinant-normalize (expects j->i)
+                H = pairs(e).Hij; % ensure bottom-right = 1
+                Hc{e} = centerNormalizeH(H, Wi, Hi, Wj, Hj);
             end
 
-            % Estimate the focal lengths
-            % Collect i->j homographies
-            HAll = {Hlist(:).H};
+            % Drop empties / ill-conditioned
+            Hc = Hc(~cellfun(@isempty, Hc));
 
-            % Centering matrices (shift top-left origin to image center)
-            C = @(w, h) [1 0 -w / 2; 0 1 -h / 2; 0 0 1];
+            % Optionally also use the opposite direction (AFTER centering)
+            HcBoth = [Hc, cellfun(@(M) inv(M), Hc, 'UniformOutput', false)];
 
-            % Build centered homographies (still i->j)
-            Hc = cell(1, numel(HAll));
-
-            for e = 1:numel(HAll)
-                i = Hlist(e).i; j = Hlist(e).j;
-                Ci = C(imageSizes(i, 2), imageSizes(i, 1));
-                Cj = C(imageSizes(j, 2), imageSizes(j, 1));
-                % center both sides, keep column convention
-                Hc{e} = Cj * (HAll{e} ./ HAll{e}(3, 3)) / Ci;
-            end
-
-            % Optional: also consider the opposite direction for robustness
-            Hc_both = [Hc, cellfun(@inv, Hc, 'UniformOutput', false)];
-            fvec = arrayfun(@(tform) focal_from_H_shumsz_paper(tform), Hc_both);
-
-            % Keep valid, robust-aggregate
-            fvec = fvec(isfinite(fvec) & fvec > 0);
+            % Per-H focal (guarded)
+            fvec = cellfun(@focalsHomographyShumsz, HcBoth);
+            fvec = fvec(isfinite(fvec) & fvec > 0 & fvec < 5e4); % sanity cap
 
             if ~isempty(fvec)
-                f_used = median(fvec);
-                fprintf('Estimated focal length Shum–Szeliski (single homography H): %.4f px\n', f_used);
+                fUsed = median(fvec);
+                fprintf('Estimated focal length Shum–Szeliski (single homography H): %.4f pixels\n', fUsed);
             else
                 % Fallback: 0.8*max(h,w) per image -> global median
-                f_fallback = 0.8*max(imageSizes, [], 2); % N×1
-                f_used = median(f_fallback);
+                fFallback = 0.8 * max(imageSizes, [], 2); % N×1
+                fUsed = median(fFallback);
                 fprintf(['Cannot estimate focal lengths, %s motion model is used! ', ...
-                         'Therefore, using the max(h,w) x 0.8 | f used: %.4f\n'], ...
-                    input.transformationType, f_used);
+                         'Therefore, using the max(h,w) x 0.8 | f used: %.4f pixels\n'], ...
+                    input.transformationType, fUsed);
             end
 
         otherwise
             error('Require one focal estimate method.')
     end
 
-    % ---------- (D) Build K for all images ----------
-    for i = 1:N
+    % ---------- (B) Build K for all images  (consistent pp) ----------
+    parfor i = 1:N
         Hi = imageSizes(i, 1); Wi = imageSizes(i, 2);
-        cx = Wi / 2; cy = Hi / 2;
-        fi = f_used;
-        K{i} = [fi, 0, cx;
-                0, fi, cy;
-                0, 0, 1];
+        [cx, cy] = ppCenter(Wi, Hi);
+        fi = fUsed;
+        K{i} = [fi 0 cx; 0 fi cy; 0 0 1];
     end
 
-    % ---------- (E) Build relative rotations from H and propagate ----------
-    % Prepare adjacency with edge IDs
-    G = cell(N, 1);
+    % ---------- (C) Build MST from MATCH COUNTS (SIMPLIFIED) ----------
+    % Get MST based on match counts (like working code)
+    tree = maximumSpanningTree(numMatches);
 
-    for e = 1:numel(Hlist)
-        i = Hlist(e).i; j = Hlist(e).j;
-        G{i} = [G{i}; j, e]; %#ok<AGROW>
-        G{j} = [G{j}; i, e]; %#ok<AGROW>
-    end
+    % ---------- (D) Extract rotations from MST edges ----------
+    % Now compute relative rotations for edges in the tree
+    % Vectorized: Extract edges from upper triangle of tree
+    [iVec, jVec] = find(triu(tree, 1));
+    treeEdges = [iVec, jVec];
 
-    % Seed gauge
-    for i = 1:N, R{i} = eye(3); end
+    % Propagate rotations along tree from seed
     visited = false(N, 1);
     visited(seed) = true;
+    R{seed} = eye(3);
+    queue = seed;
 
-    % BFS from seed
-    q = seed;
+    while ~isempty(queue)
+        u = queue(1); queue(1) = [];
 
-    while ~isempty(q)
-        u = q(1); q(1) = [];
+        % Find neighbors in tree
+        for e = 1:size(treeEdges, 1)
+            i = treeEdges(e, 1);
+            j = treeEdges(e, 2);
 
-        for r = 1:size(G{u}, 1)
-            v = G{u}(r, 1);
-            eid = G{u}(r, 2);
+            if i == u && ~visited(j)
+                % u -> j
+                Hij = initialTforms{i, j}; % i <- j
 
-            if ~visited(v)
-                i = Hlist(eid).i; j = Hlist(eid).j; H = Hlist(eid).H;
-
-                if i == u && j == v
-                    Rij = projectToSO3(K{u} \ H * K{v});
-                    R{v} = R{u} * Rij;
-
-                    if strcmp(input.focalEstimateMethod, 'shumSzeliskiOneH')
-                        % K_j^{-1} H_ij K_i = R_j R_i^T
-                        Rij = projectToSO3(K{j} \ H * K{i});
-                        R{v} = Rij * R{u}; % R_j = (R_j R_i^T) * R_i
-                    end
-
-                elseif i == v && j == u
-                    Rji = projectToSO3(K{v} \ H * K{u});
-                    R{v} = R{u} * Rji'; % Rij = (Rji)'
-
-                    if strcmp(input.focalEstimateMethod, 'shumSzeliskiOneH')
-                        % Using H_ji
-                        Rji = projectToSO3(K{u} \ H * K{v}); % K_u^{-1} H_ji K_v = R_u R_v^T
-                        R{v} = (Rji') * R{u}; % R_v = (R_v R_u^T)^T * R_u
-                    end
-
+                if ~isempty(Hij)
+                    Wi = imageSizes(i, 2); Hi = imageSizes(i, 1);
+                    Wj = imageSizes(j, 2); Hj = imageSizes(j, 1);
+                    Rrel = relativeRotHij(Hij, Wi, Hi, Wj, Hj, fUsed); % R_j R_i^T
+                    R{j} = projectToSO3(Rrel' * R{i});
                 else
-                    continue
+                    R{j} = R{i}; % fallback
                 end
 
-                R{v} = projectToSO3(R{v});
-                visited(v) = true;
-                q(end + 1) = v; %#ok<AGROW>
+                visited(j) = true;
+                queue = [queue, j];
+
+            elseif j == u && ~visited(i)
+                % u -> i
+                Hji = initialTforms{j, i}; % j <- i
+
+                if ~isempty(Hji)
+                    Wi = imageSizes(i, 2); Hi = imageSizes(i, 1);
+                    Wj = imageSizes(j, 2); Hj = imageSizes(j, 1);
+                    Rrel = relativeRotHij(Hji, Wi, Hi, Wj, Hj, fUsed); % R_i R_j^T
+                    R{i} = projectToSO3(Rrel' * R{j});
+                else
+                    R{i} = R{j}; % fallback
+                end
+
+                visited(i) = true;
+                queue = [queue, i];
             end
 
         end
 
     end
 
-    % Ensure seed exactly identity (re-anchor)
-    R{seed} = eye(3);
+    % ---------- (E) Check rotation consistency ----------
+    [noRotation, meanAE, medAE, maxAE] = rotationConsistency(input, pairs, imageSizes, R, fUsed);
+
+    fprintf('Init rotation consistency: mean=%.2f°, median=%.2f°, max=%.2f°, noRot=%i\n', ...
+        meanAE, medAE, maxAE, noRotation);
+
+    if noRotation
+        fprintf('Panorama classified as NON-rotational (planar / translating camera).\n');
+    else
+        fprintf('Panorama classified as rotational (approx. pure rotation about center).\n');
+    end
+
+    % ---------- (F) Chain homographies to seed using getTforms pattern ----------
+    if noRotation || input.forcePlanarScan
+        % Chain homographies using clean pattern
+        H2seed = chainedHomographies(tree, seed, initialTforms, N);
+    else
+        H2seed = repmat({eye(3)}, 1, N);
+    end
+
 end
 
-
-function f = focal_from_H_shumsz_paper(h)
-    % FOCAL_FROM_H_SHUM_SZELISKI_UNNORMALIZED Estimate focal from one unnormalized H.
-    %   f = focal_from_H_shum_szeliski_unnormalized(hCell)
-    %   hCell should be a 1x1 cell containing a 3x3 homography matrix.
+% ---------- Helper Functions ----------
+function tree = maximumSpanningTree(G)
+    % MAXIMUMSPANNINGTREE Kruskal maximum spanning tree from match counts.
+    %   tree = maximumSpanningTree(G) returns an undirected graph adjacency
+    %   matrix `tree` (NxN) representing the maximum spanning tree computed
+    %   from the input weight matrix G. Higher weights are preferred.
+    %
+    % Inputs
+    %   G    - NxN numeric symmetric weight matrix (e.g., match counts).
+    %
+    % Outputs
+    %   tree - NxN numeric adjacency matrix containing selected MST edges.
 
     arguments
-        h cell
+        G (:, :) {mustBeNumeric, mustBeFinite}
     end
+
+    n = size(G, 1);
+    ccs = (1:n)';
+    components = cell(n, 1);
+
+    for i = 1:n
+        components{i} = i;
+    end
+
+    tree = zeros(n);
+    numEdges = 0;
+    [values, indices] = sort(G(:), 'descend');
+
+    for k = 1:length(indices)
+
+        if values(k) > 0
+            i = mod(indices(k) - 1, n) + 1;
+            j = ceil(indices(k) / n);
+
+            if ccs(i) ~= ccs(j)
+                tree(i, j) = values(k);
+                tree(j, i) = values(k);
+                components{ccs(i)} = [components{ccs(i)}; components{ccs(j)}];
+                ccs(components{ccs(j)}) = ccs(i);
+                numEdges = numEdges + 1;
+            end
+
+        end
+
+        if numEdges == n - 1
+            break;
+        end
+
+    end
+
+end
+
+function tforms = chainedHomographies(G, i, Tforms, n)
+    % CHAINEDHOMOGRAPHIES Chain homographies from a seed view to all views.
+    %   tforms = chainedHomographies(G, i, Tforms, n) composes homographies
+    %   stored in Tforms using connectivity encoded by G starting at seed i.
+    %
+    % Inputs
+    %   G      - NxN numeric adjacency matrix (nonzero entries indicate available transforms)
+    %   i      - seed index (scalar integer)
+    %   Tforms - cell NxN of homography matrices (or transform objects)
+    %   n      - number of views (N)
+    %
+    % Outputs
+    %   tforms - 1xN cell array of homographies mapping each view to the seed.
+
+    arguments
+        G (:, :) {mustBeNumeric}
+        i (1, 1) {mustBeInteger, mustBePositive, mustBeFinite}
+        Tforms cell
+        n (1, 1) {mustBeInteger, mustBePositive, mustBeFinite}
+    end
+
+    visited = zeros(n, 1);
+    tforms = repmat({eye(3)}, 1, n);
+    tforms{i} = eye(3); % seed
+    tforms = updateTforms(G, i, visited, tforms, Tforms, n);
+end
+
+function tforms = updateTforms(G, i, visited, tforms, Tforms, n)
+    % UPDATETFORMS Recursively update chain homographies (helper for chaining).
+    %   tforms = updateTforms(G, i, visited, tforms, Tforms, n) recursively
+    %   walks neighbors of node i and composes homographies into `tforms`.
+    %
+    % Inputs
+    %   G       - NxN numeric adjacency matrix
+    %   i       - current seed/index (scalar)
+    %   visited - Nx1 logical/numeric visited mask
+    %   tforms  - 1xN cell of current homography chains
+    %   Tforms  - NxN cell of per-edge transforms
+    %   n       - number of views
+    %
+    % Outputs
+    %   tforms  - updated 1xN cell array of homographies
+
+    arguments
+        G (:, :) {mustBeNumeric}
+        i (1, 1) {mustBeInteger, mustBePositive, mustBeFinite}
+        visited (:, 1)
+        tforms cell
+        Tforms cell
+        n (1, 1) {mustBeInteger, mustBePositive, mustBeFinite}
+    end
+
+    visited(i) = 1;
+
+    for j = 1:n
+
+        if G(i, j) > 0 && ~visited(j)
+            tform = Tforms{i, j};
+            tform = (tform' * tforms{i}')';
+            tforms{j} = (tform' ./ tform(3, 3)')';
+            [tforms] = updateTforms(G, j, visited, tforms, Tforms, n);
+        end
+
+    end
+
+end
+
+function [noRotation, meanAE, medAE, maxAE] = rotationConsistency(input, pairs, imageSizes, R, fUsed)
+    % ROTATIONCONSISTENCY Compute angular error statistics between relative rotations.
+    %   [noRotation, meanAE, medAE, maxAE] = rotationConsistency(input, pairs,
+    %       imageSizes, R, fUsed) computes per-pair angle errors comparing
+    %   estimated rotations R to those implied by homographies in pairs.
+    %
+    % Inputs
+    %   input      - options struct (controls verbose output)
+    %   pairs      - struct array with fields .i, .j and .Hij (homographies)
+    %   imageSizes - N×2 array of image sizes
+    %   R          - 1×N cell array of rotation matrices
+    %   fUsed      - scalar or vector of focal lengths used for relative rot calc
+    %
+    % Outputs
+    %   noRotation - logical scalar: true if content classified as non-rotational
+    %   meanAE     - mean angular error (degrees)
+    %   medAE      - median angular error (degrees)
+    %   maxAE      - maximum angular error (degrees)
+
+    arguments
+        input struct
+        pairs struct
+        imageSizes (:, :) {mustBeNumeric}
+        R cell
+        fUsed {mustBeNumeric}
+    end
+
+    angleErr = zeros(numel(pairs), 1);
+
+    for e = 1:numel(pairs)
+        i = pairs(e).i; j = pairs(e).j; H = pairs(e).Hij;
+        Wi = imageSizes(i, 2); Hi = imageSizes(i, 1);
+        Wj = imageSizes(j, 2); Hj = imageSizes(j, 1);
+        Rrel = relativeRotHij(H, Wi, Hi, Wj, Hj, fUsed);
+        D = R{i} * R{j}'; % should match Rrel
+        c = max(-1, min(1, (trace(D' * Rrel) - 1) / 2));
+        angleErr(e) = acos(c); % radians
+    end
+
+    if input.verboseInitRKf
+        fprintf('Init rotation consistency: mean=%.2f°, median=%.2f°, max=%.2f°\n', ...
+            mean(angleErr) * 180 / pi, median(angleErr) * 180 / pi, max(angleErr) * 180 / pi);
+    end
+
+    meanAE = mean(angleErr) * 180 / pi;
+    medAE = median(angleErr) * 180 / pi;
+    maxAE = max(angleErr) * 180 / pi;
+
+    noRotation = medAE > 0.6 && maxAE > 100;
+end
+
+function [cx, cy] = ppCenter(W, H)
+    % PCCENTER Compute image principal-point center coordinates.
+    %   [cx, cy] = ppCenter(W, H) returns the (cx,cy) image center coordinates
+    %   used for centering homographies.
+    %
+    % Inputs
+    %   W - image width (positive scalar)
+    %   H - image height (positive scalar)
+    %
+    % Outputs
+    %   cx, cy - center coordinates (scalars)
+
+    arguments
+        W (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+        H (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+    end
+
+    cx = W / 2; cy = H / 2;
+end
+
+function relativeRot = relativeRotHij(Hij, Wi, Hi, Wj, Hj, f)
+    % RELATIVEROTHIJ Compute relative rotation from centered homography Hij.
+    %   relativeRot = relativeRotHij(Hij, Wi, Hi, Wj, Hj, f) computes an
+    %   approximation of R_i * R_j^T from the homography mapping j->i.
+    %
+    % Inputs
+    %   Hij - 3x3 homography mapping points in image j to image i
+    %   Wi,Hi, Wj,Hj - image widths and heights for images i and j
+    %   f   - focal length (scalar)
+    %
+    % Outputs
+    %   relativeRot - 3x3 rotation matrix approximating relative rotation
+
+    arguments
+        Hij (3, 3) {mustBeNumeric}
+        Wi (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+        Hi (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+        Wj (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+        Hj (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+        f {mustBeNumeric}
+    end
+
+    [cxi, cyi] = ppCenter(Wi, Hi);
+    [cxj, cyj] = ppCenter(Wj, Hj);
+    Ci = [1 0 cxi; 0 1 cyi; 0 0 1];
+    Cj = [1 0 cxj; 0 1 cyj; 0 0 1];
+
+    Hc = Ci \ Hij * Cj; % j -> i, centered
+    s = sign(det(Hc)) * nthroot(abs(det(Hc)) + eps, 3); % det-normalize
+    Hn = Hc / s;
+
+    K0 = diag([f, f, 1]); % zero-centered K
+    relativeRot = projectToSO3(K0 \ Hn * K0); % ≈ R_i R_j^T
+end
+
+function f = focalsHomographyShumsz(H)
+    % FOCALSHOMOGRAPHYSHUMSZ  Estimate focal length from a single homography
+    %   f = focalsHomographyShumsz(H)
+    %   Computes an estimate of the focal length (in pixels) from a single
+    %   3x3 homography matrix. The method follows Shum & Szeliski-style
+    %   algebraic constraints and returns NaN when a valid estimate cannot be
+    %   derived from the provided matrix.
+    %
+    % Inputs
+    %   H  - 3x3 numeric homography matrix (may be unnormalized)
+    %
+    % Outputs
+    %   f  - scalar focal length estimate in pixels (double). Returns NaN
+    %        if the estimate is invalid or cannot be computed.
 
     % Reference: Shum, HY., Szeliski, R. (2001). Construction of
     % Panoramic Image Mosaics with Global and Local Alignment.
@@ -483,145 +648,72 @@ function f = focal_from_H_shumsz_paper(h)
     % Monographs in Computer Science. Springer, New York,
     % NY. https://doi.org/10.1007/978-1-4757-3482-9_13
 
-    % Get the transformation matrix from the cellarray
-    h = h{1};
-
-    % f1 focal length
-    d1 = h(3, 1) * h(3, 2);
-    d2 = (h(3, 2) - h(3, 1)) * (h(3, 2) + h(3, 1));
-    v1 =- (h(1, 1) * h(1, 2) + h(2, 1) * h(2, 2)) / d1;
-    v2 = (h(1, 1) ^ 2 + h(2, 1) ^ 2 - h(1, 2) ^ 2 - h(2, 2) ^ 2) / d2;
-
-    % Swap v1 and v2
-    if v1 < v2
-        temp = v1;
-        v1 = v2;
-        v2 = temp;
+    arguments
+        H (3, 3) double {mustBeFinite}
     end
 
-    % v1 and v2 > condition check
+    if isempty(H)
+        f = NaN; return;
+    end
+
+    % --- f1 ---
+    d1 = H(3, 1) * H(3, 2);
+    d2 = (H(3, 2) - H(3, 1)) * (H(3, 2) + H(3, 1));
+    v1 =- (H(1, 1) * H(1, 2) + H(2, 1) * H(2, 2)) / d1;
+    v2 = (H(1, 1) ^ 2 + H(2, 1) ^ 2 - H(1, 2) ^ 2 - H(2, 2) ^ 2) / d2;
+
+    if v1 < v2
+        tmp = v1; v1 = v2; v2 = tmp;
+    end
+
     if v1 > 0 && v2 > 0
         f1 = sqrt(v1 * (abs(d1) > abs(d2)) + v2 * (abs(d1) <= abs(d2)));
     elseif v1 > 0
         f1 = sqrt(v1);
     else
-        f = 0;
-        return;
+        f = NaN; return;
     end
 
-    % f0 focal length
-    d1 = h(1, 1) * h(2, 1) + h(1, 2) * h(2, 2);
-    d2 = h(1, 1) ^ 2 + h(1, 2) ^ 2 - h(2, 1) ^ 2 - h(2, 2) ^ 2;
-    v1 = -h(1, 3) * h(2, 3) / d1;
-    v2 = (h(2, 3) ^ 2 - h(1, 3) ^ 2) / d2;
+    % --- f0 ---
+    d1 = H(1, 1) * H(2, 1) + H(1, 2) * H(2, 2);
+    d2 = H(1, 1) ^ 2 + H(1, 2) ^ 2 - H(2, 1) ^ 2 - H(2, 2) ^ 2;
+    v1 = -H(1, 3) * H(2, 3) / d1;
+    v2 = (H(2, 3) ^ 2 - H(1, 3) ^ 2) / d2;
 
-    % Swap v1 and v2
     if v1 < v2
-        temp = v1;
-        v1 = v2;
-        v2 = temp;
+        tmp = v1; v1 = v2; v2 = tmp;
     end
 
-    % v1 and v2 > condition check
     if v1 > 0 && v2 > 0
         f0 = sqrt(v1 * (abs(d1) > abs(d2)) + v2 * (abs(d1) <= abs(d2)));
     elseif v1 > 0
         f0 = sqrt(v1);
     else
-        f = 0;
-        return;
+        f = NaN; return;
     end
 
-    % Check for infinity
-    if isinf(f1) || isinf(f0)
-        f = 0;
-        return;
-    end
-
-    % Geometric mean
-    f = sqrt(f1 * f0);
+    f = sqrt(f1 * f0); % geometric mean
 end
 
-function f = focal_from_H_shum_szeliski(Hn)
-    % FOCAL_FROM_H_SHUM_SZELISKI Estimate focal from centered, det-normalized H.
-    %   f = focal_from_H_shum_szeliski(Hn)
-
-    % Reference: Shum, HY., Szeliski, R. (2001). Construction of
-    % Panoramic Image Mosaics with Global and Local Alignment.
-    % In: Benosman, R., Kang, S.B. (eds) Panoramic Vision.
-    % Monographs in Computer Science. Springer, New York,
-    % NY. https://doi.org/10.1007/978-1-4757-3482-9_13
-
-    % Hn: centered & det-normalized column-form homography (j->i)
-    % Returns a single positive focal candidate f (scalar) or [] if invalid.
-    arguments
-        Hn (3, 3) double {mustBeFinite}
-    end
-
-    % --- First focal (f1) from bottom row & left 2x2 block
-    d1 = Hn(3, 1) * Hn(3, 2);
-    d2 = (Hn(3, 2) - Hn(3, 1)) * (Hn(3, 2) + Hn(3, 1));
-
-    v1 =- (Hn(1, 1) * Hn(1, 2) + Hn(2, 1) * Hn(2, 2));
-    v2 = (Hn(1, 1) ^ 2 + Hn(2, 1) ^ 2 - Hn(1, 2) ^ 2 - Hn(2, 2) ^ 2);
-
-    % --- Second focal (f0) from right column & left 2x2 block
-    d1b = Hn(1, 1) * Hn(2, 1) + Hn(1, 2) * Hn(2, 2);
-    d2b = Hn(1, 1) ^ 2 + Hn(1, 2) ^ 2 - Hn(2, 1) ^ 2 - Hn(2, 2) ^ 2;
-
-    v1b = -Hn(1, 3) * Hn(2, 3);
-    v2b = (Hn(2, 3) ^ 2 - Hn(1, 3) ^ 2);
-
-    f1sq = candidate_v_to_f2(v1, v2, d1, d2);
-    f0sq = candidate_v_to_f2(v1b, v2b, d1b, d2b);
-
-    if isempty(f1sq) && isempty(f0sq), f = []; return; end
-    if isempty(f1sq), f = sqrt(max(f0sq, 0)); return; end
-    if isempty(f0sq), f = sqrt(max(f1sq, 0)); return; end
-
-    % --- Correct geometric mean (Shum & Szeliski, Eq. (7)) ---
-    f = sqrt(sqrt(f1sq) * sqrt(f0sq)); %  f = √(f1 * f0)
-
-    if ~isfinite(f) || f <= 0, f = [];
-    end
-
-end
-
-function f2 = candidate_v_to_f2(v1, v2, d1, d2)
-    % CANDIDATE_V_TO_F2 Resolve focal^2 candidate from v1/v2 with denom guards.
-    %   f2 = candidate_v_to_f2(v1, v2, d1, d2)
-
-    arguments
-        v1 (1, 1) double {mustBeFinite}
-        v2 (1, 1) double {mustBeFinite}
-        d1 (1, 1) double {mustBeFinite}
-        d2 (1, 1) double {mustBeFinite}
-    end
-
-    % Implements the v1/v2 selection with denominator guards
-    f2 = []; %#ok<NASGU>
-    % guard tiny denominators
-    tol = 1e-12;
-    use1 = abs(d1) > tol; if use1, v1 = v1 / d1; else, v1 = -Inf; end
-    use2 = abs(d2) > tol; if use2, v2 = v2 / d2; else, v2 = -Inf; end
-
-    % put larger one in v1 as in your code
-    if v1 < v2, tmp = v1; v1 = v2; v2 = tmp; end
-
-    if v1 > 0 && v2 > 0
-        % choose by larger denominator magnitude
-        if abs(d1) > abs(d2), f2 = v1; else, f2 = v2; end
-    elseif v1 > 0
-        f2 = v1;
-    else
-        f2 = [];
-    end
-
-end
-
-function Hn = center_and_normalize_H(H, Wi, Hi, Wj, Hj)
-    % CENTER_AND_NORMALIZE_H Center H (j->i) and normalize determinant to 1.
-    %   Hn = center_and_normalize_H(H, Wi, Hi, Wj, Hj)
+function Hn = centerNormalizeH(H, Wi, Hi, Wj, Hj)
+    % CENTERNORMALIZEH  Center homography and normalize determinant to 1
+    %   Hn = centerNormalizeH(H, Wi, Hi, Wj, Hj)
+    %   Transforms the input homography (mapping points from image j to i)
+    %   by shifting principal points to image centers and scaling the result
+    %   so that its determinant has unit magnitude. Returns empty when the
+    %   input is degenerate or non-finite.
+    %
+    % Inputs
+    %   H   - 3x3 homography matrix mapping points from image j to image i
+    %   Wi  - width of image i (positive scalar)
+    %   Hi  - height of image i (positive scalar)
+    %   Wj  - width of image j (positive scalar)
+    %   Hj  - height of image j (positive scalar)
+    %
+    % Outputs
+    %   Hn  - 3x3 centered and determinant-normalized homography. Returns
+    %         empty [] if the input is invalid or normalization is not
+    %         possible (e.g., non-finite determinant).
 
     arguments
         H (3, 3) double {mustBeFinite}
@@ -633,8 +725,11 @@ function Hn = center_and_normalize_H(H, Wi, Hi, Wj, Hj)
 
     % Column-form H (j->i). Returns centered (Ci^{-1} H Cj) and det-normalized.
 
-    Ci = [1 0 Wi / 2; 0 1 Hi / 2; 0 0 1];
-    Cj = [1 0 Wj / 2; 0 1 Hj / 2; 0 0 1];
+    [cxi, cyi] = ppCenter(Wi, Hi);
+    [cxj, cyj] = ppCenter(Wj, Hj);
+
+    Ci = [1 0 cxi; 0 1 cyi; 0 0 1];
+    Cj = [1 0 cxj; 0 1 cyj; 0 0 1];
 
     Hc = (Ci \ H) * Cj;
 
@@ -645,144 +740,18 @@ function Hn = center_and_normalize_H(H, Wi, Hi, Wj, Hj)
     Hn = Hc / s;
 end
 
-function Hji = getHomog_j_to_i(input, pair, imageSizes, initialTforms) %#ok<INUSD>
-    % GETHOMOG_J_TO_I Obtain j->i homography (column form) from inputs or estimates.
-    %   Hji = getHomog_j_to_i(input, pair, imageSizes, initialTforms)
-    %   Returns a 3x3 homography mapping points in image j to image i in column form.
+function rotation = projectToSO3(M)
+    % PROJECTTOSO3  Project a 3x3 matrix to the nearest proper rotation
+    %   rotation = projectToSO3(M)
+    %   Finds the closest proper rotation matrix (element of SO(3)) to the
+    %   input 3x3 matrix using the singular value decomposition (SVD). The
+    %   resulting matrix has determinant +1.
     %
-    %   Inputs
-    %   - input         : struct with options controlling matching/robustness
-    %   - pair          : struct with fields .i,.j,.Ui,.Uj
-    %   - imageSizes    : N-by-2 [H W]
-    %   - initialTforms : [] | cell NxN | struct array with .i,.j,.H
-
-    arguments
-        input (1, 1) struct
-        pair (1, 1) struct
-        imageSizes (:, 3) double {mustBeFinite}
-        initialTforms
-    end
-
-    % No-op reference to silence potential unused warnings in certain branches
-    imageSizes = imageSizes; %#ok<NASGU>
-    % Return a 3x3 column-form homography mapping j -> i: x_i ~ Hji * x_j
-
-    i = pair.i; j = pair.j;
-    Hji = [];
-
-    if ~isempty(initialTforms)
-
-        if iscell(initialTforms)
-            T = initialTforms{i, j};
-
-            if ~isempty(T)
-                Hji = toColumn(T); % assume j->i slot
-            else
-                T = initialTforms{j, i}; % try opposite and invert
-
-                if ~isempty(T)
-                    Hij = toColumn(T); % i->j
-                    if is_validH(Hij), Hji = inv(Hij); end
-                end
-
-            end
-
-        else
-            % struct array with .i,.j,.H
-            idx = find([initialTforms.i] == i & [initialTforms.j] == j, 1);
-
-            if ~isempty(idx)
-                Hji = toColumn(initialTforms(idx).H);
-            else
-                idx = find([initialTforms.i] == j & [initialTforms.j] == i, 1);
-
-                if ~isempty(idx)
-                    Hij = toColumn(initialTforms(idx).H);
-                    if is_validH(Hij), Hji = inv(Hij); end
-                end
-
-            end
-
-        end
-
-    end
-
-    % Fallback: estimate from matches (return column-form j->i)
-    if isempty(Hji) && size(pair.Ui, 1) >= 4
-
-        try
-
-            if input.useMATLABImageMatching == 1
-                tform = estgeotform2d(pair.Uj, pair.Ui, input.transformationType, ...
-                    'Confidence', input.inliersConfidence, ...
-                    'MaxNumTrials', input.maxIter, ...
-                    'MaxDistance', input.maxDistance);
-                Hji = toColumn(tform); % *** transpose here ***
-
-                Hji = Hji.A;
-            else
-
-                switch input.imageMatchingMethod
-                    case 'ransac'
-                        [Hraw, ~] = estimateTransformationRANSAC(pair.Uj, pair.Ui, ...
-                            input.transformationType, input);
-                    case 'mlesac'
-                        [Hraw, ~] = estimateTransformationMLESAC(pair.Uj, pair.Ui, ...
-                            input.transformationType, input);
-                    otherwise
-                        error('Valid image matching method is required.')
-                end
-
-                Hji = toColumn(Hraw);
-            end
-
-        catch
-            Hji = [];
-        end
-
-    end
-
-    % Final validation & orientation fix
-    if ~is_validH(Hji)
-        Hji = [];
-        return
-    end
-
-    % Optional: force det>0 (helps the rotation projection)
-    if det(Hji) < 0, Hji = -Hji; end
-
-    function Hc = toColumn(T)
-        % TOCOLUMN Converts the input transformation matrix T to column-form homography.
-        %   Hc = TOCOLUMN(T) returns the column-form 3x3 homography matrix from T.
-        %   If T is a projective2d object, returns its transpose.
-        %   If T is a numeric matrix, returns it unchanged.
-        %
-        %   Input:
-        %       T - projective2d object or 3x3 numeric matrix.
-        %   Output:
-        %       Hc - 3x3 column-form homography matrix.
-        if isa(T, 'projective2d')
-            % projective2d: row form [x y 1] * T  -> column form is T.'
-            Hc = T.T.';
-        else
-            Hc = T;
-        end
-
-    end
-
-    function ok = is_validH(H)
-        % IS_VALIDH Check if a homography matrix H is valid (finite, non-empty, rank 3).
-        %   ok = is_validH(H)
-        %   Returns true if H is a non-empty, finite 3x3 matrix with full rank.
-
-        ok = ~isempty(H) && all(isfinite(H(:))) && (rank(H) == 3);
-    end
-
-end
-
-function R = projectToSO3(M)
-    % PROJECTTOSO3 Project a matrix to the closest proper rotation via SVD.
-    %   R = projectToSO3(M)
+    % Inputs
+    %   M  - 3x3 numeric matrix to be projected
+    %
+    % Outputs
+    %   rotation - 3x3 proper rotation matrix with det(rotation) == +1
 
     arguments
         M (3, 3) double {mustBeFinite}
@@ -790,5 +759,5 @@ function R = projectToSO3(M)
 
     % SVD projection to the closest proper rotation.
     [U, ~, V] = svd(M);
-    R = U * diag([1, 1, sign(det(U * V'))]) * V';
+    rotation = U * diag([1, 1, sign(det(U * V'))]) * V';
 end

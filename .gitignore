@@ -3,9 +3,6 @@
 
 # Ignore node_modules folder
 node_modules
-/Archive
-/Logs
-gainCompensation_v1.m
 
 # Ignore all files
 *.txt
@@ -22,6 +19,8 @@ gainCompensation_v1.m
 *.PDF
 *.asv
 
+# Ignore files
+toolboxesList.m
 scrachPaper.m
 !Readme.txt
 !assets/church_01.jpeg
@@ -35,8 +34,7 @@ scrachPaper.m
 !assets/dataset_samples_yellowstone.png
 !assets/grand_canyon_01.jpeg
 !assets/grand_canyon_02.jpeg
-
-Procedural Program/buggy_imagesets.txt
+!Procedural Program/requirements.txt
 
 # Ignore files related to API keys
 .env
@@ -46,3 +44,7 @@ Procedural Program/buggy_imagesets.txt
 
 # Folders
 Archive/
+Helper Python Files/
+Logs/
+Procedural Program - 2.9.2/
+Procedural Program - My Transform/

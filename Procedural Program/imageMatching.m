@@ -1,4 +1,4 @@
-function [allMatches, numMatches, tforms] = imageMatching(input, n, keypoints, matchesAll, images)
+function [allMatches, numMatches, tforms] = imageMatching(input, n, keypoints, matchesAll, imagesProcessed)
     %IMAGEMATCHING Verify pairwise image matches and estimate pair transforms.
     %
     % Syntax
@@ -51,7 +51,7 @@ function [allMatches, numMatches, tforms] = imageMatching(input, n, keypoints, m
         n (1, 1) double {mustBeInteger, mustBePositive}
         keypoints cell
         matchesAll cell
-        images cell
+        imagesProcessed cell
     end
 
     % Basic shape validations that depend on runtime values
@@ -63,7 +63,7 @@ function [allMatches, numMatches, tforms] = imageMatching(input, n, keypoints, m
         error('imageMatching:InvalidKeypointsLength', 'keypoints must contain n elements (one per image).');
     end
 
-    if numel(images) ~= n
+    if numel(imagesProcessed) ~= n
         error('imageMatching:InvalidImagesLength', 'images must contain n elements (one per image).');
     end
 
@@ -108,13 +108,13 @@ function [allMatches, numMatches, tforms] = imageMatching(input, n, keypoints, m
         matches = matchesAll{ii, jj};
 
         % Number of features
-        nf = size(matches, 2);
+        nf = size(matches, 1);
 
         % Image matching
         % Filter matches using RANSAC (model maps keypt i to keypt j)
         if nf >= nfmin
             [inliers, model] = refineMatch(input, keypoints{ii}, keypoints{jj}, matches, ...
-                images{ii}, images{jj});
+                imagesProcessed{ii}, imagesProcessed{jj});
 
             if input.useMATLABImageMatching == 1
                 model = model.A;
@@ -129,7 +129,7 @@ function [allMatches, numMatches, tforms] = imageMatching(input, n, keypoints, m
                     strcmp(input.transformationType, 'translation')
 
                 if ni > 5 + 0.025 * nf %2 % accept as correct image match
-                    allMatches_temp{i} = matches(:, inliers);
+                    allMatches_temp{i} = matches(inliers, :);
                     numMatches_temp(i) = ni;
                     tforms_ij{i} = model;
                     tforms_ji{i} = inv(model);
@@ -138,7 +138,7 @@ function [allMatches, numMatches, tforms] = imageMatching(input, n, keypoints, m
             elseif strcmp(input.transformationType, 'affine')
 
                 if ni > 5 + 0.15 * nf %3 % accept as correct image match
-                    allMatches_temp{i} = matches(:, inliers);
+                    allMatches_temp{i} = matches(inliers, :);
                     numMatches_temp(i) = ni;
                     tforms_ij{i} = model;
                     tforms_ji{i} = inv(model);
@@ -147,7 +147,7 @@ function [allMatches, numMatches, tforms] = imageMatching(input, n, keypoints, m
             else
 
                 if ni > 8 + 0.3 * nf
-                    allMatches_temp{i} = matches(:, inliers);
+                    allMatches_temp{i} = matches(inliers, :);
                     numMatches_temp(i) = ni;
                     tforms_ij{i} = model;
                     tforms_ji{i} = inv(model);
@@ -213,9 +213,9 @@ function [inliers, model] = refineMatch(input, P1, P2, matches, image1, image2)
     %   - Visualization uses montage and showMatchedFeatures.
     arguments
         input (1, 1) struct
-        P1 (2, :) double
-        P2 (2, :) double
-        matches (2, :) double {mustBeInteger, mustBePositive}
+        P1 (:, 2) double
+        P2 (:, 2) double
+        matches (:, 2) double {mustBeInteger, mustBePositive}
         image1
         image2
     end
@@ -223,15 +223,15 @@ function [inliers, model] = refineMatch(input, P1, P2, matches, image1, image2)
     % Validate index ranges if matches are present
     if ~isempty(matches)
 
-        if max(matches(1, :)) > size(P1, 2) || max(matches(2, :)) > size(P2, 2)
+        if max(matches(:, 1)) > size(P1, 1) || max(matches(:, 2)) > size(P2, 1)
             error('refineMatch:MatchIndexOutOfBounds', 'Match indices exceed keypoint array sizes.');
         end
 
     end
 
     % Matched points
-    matchedPts_1 = P1(:, matches(1, :))';
-    matchedPts_2 = P2(:, matches(2, :))';
+    matchedPts_1 = P1(matches(:, 1), :);
+    matchedPts_2 = P2(matches(:, 2), :);
 
     % Estimate the transformation using the RANSAC or MLESAC
     if input.useMATLABImageMatching == 1

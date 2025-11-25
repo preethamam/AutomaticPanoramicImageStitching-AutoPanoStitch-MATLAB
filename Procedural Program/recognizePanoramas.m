@@ -1,5 +1,6 @@
 function [bundlerTformsAll, finalrefIdxsAll, panoIndices, concomps, panaromaCCs, connCompsNumber] = recognizePanoramas(input, ...
-        numMatchesAll, matchesAll, keypointsAll, imageSizesAll, initialTformsAll)
+        numMatchesAll, matchesAll, keypointsAll, imageSizesAll, initialTformsAll, ...
+        numMatchesG, concomps, ccBinSizes)
     %RECOGNIZEPANORAMAS Identify panorama groups and refine transforms by bundle adjustment.
     %
     % Syntax
@@ -56,6 +57,9 @@ function [bundlerTformsAll, finalrefIdxsAll, panoIndices, concomps, panaromaCCs,
         keypointsAll cell
         imageSizesAll (:, 3) {mustBeNumeric, mustBeFinite, mustBeNonnegative}
         initialTformsAll (:, :) cell
+        numMatchesG
+        concomps
+        ccBinSizes
     end
 
     % Cross-array consistency checks
@@ -112,13 +116,16 @@ function [bundlerTformsAll, finalrefIdxsAll, panoIndices, concomps, panaromaCCs,
     end
 
     % Find connected components of image matches
-    numMatchesG = graph(numMatchesAll, 'upper');
-    [concomps, ccBinSizes] = conncomp(numMatchesG);
     panaromaCCsAll = find(ccBinSizes >= 1);
-    panaromaCCs = find(ccBinSizes > 1);    
+    panaromaCCs = find(ccBinSizes > 1);
     connCompsNumber = numel(panaromaCCsAll);
 
     fprintf('Found %i panorama images set(s).\n', numel(panaromaCCs));
+
+    % Show graphs
+    if input.showAdjacencyGraph
+        showAdjacencyGraphs(numMatchesAll, numMatchesG);
+    end
 
     % Initialize
     bundlerTformsAll = cell(numel(panaromaCCs), 1);
@@ -150,14 +157,16 @@ function [bundlerTformsAll, finalrefIdxsAll, panoIndices, concomps, panaromaCCs,
         keypoints = keypointsAll(idxs);
         imageSizes = imageSizesAll(idxs, :);
         matches = matchesAll(idxs, idxs);
-        initialTforms = initialTformsAll(idxs, idxs);        
+        initialTforms = initialTformsAll(idxs, idxs);
 
         % Perform bundle adjustment
         BAtic = tic;
-        [bundlerTforms, finalrefIdxs] = bundleAdjustmentLM(input, numMatches, matches, keypoints, ...
+        [bundlerTforms, finalrefIdxs] = bundleAdjustmentRKf(input, numMatches, matches, keypoints, ...
             imageSizes, initialTforms, ...
             'MaxLMIters', input.maxIterLM, 'Lambda0', input.lambda, ...
-            'SigmaHuber', input.sigmaHuber, 'Verbose', input.verboseLM);
+            'SigmaHuber', input.sigmaHuber, 'Verbose', input.verboseLM, ...
+            'OneDirection', input.residualOneDirection, ...
+            'MaxMatches', input.MaxMatches);
 
         fprintf('Final alignment (Bundle adjustment): %f seconds\n', toc(BAtic));
 
@@ -166,4 +175,63 @@ function [bundlerTformsAll, finalrefIdxsAll, panoIndices, concomps, panaromaCCs,
         finalrefIdxsAll(i) = finalrefIdxs;
     end
 
+end
+
+function showAdjacencyGraphs(numMatchesAll, numMatchesG)
+    % showAdjacencyGraphs  Display adjacency matrix and corresponding graph.
+    %
+    %   showAdjacencyGraphs(numMatchesAll, numMatchesG) displays two figures:
+    %     - an image of the adjacency/match-count matrix `numMatchesAll` using
+    %       `imagesc`, and
+    %     - a graph visualization created from the `numMatchesG` graph object.
+    %
+    % Inputs:
+    %   numMatchesAll - N-by-N numeric matrix of match counts (nonnegative,
+    %                   finite values expected)
+    %   numMatchesG   - A `graph` or `digraph` object representing image
+    %                   connectivity (used with `plot`).
+    %
+    % Example:
+    %   G = graph(adjacencyMatrix>0);
+    %   showAdjacencyGraphs(adjacencyMatrix, G);
+    %
+    % See also: imagesc, graph, digraph, plot
+
+    arguments
+        numMatchesAll (:, :) {mustBeNumeric, mustBeFinite, mustBeNonnegative}
+        numMatchesG {mustBeA(numMatchesG, {'graph', 'digraph'})}
+    end
+
+    % Basic shape/consistency checks
+    N = size(numMatchesAll, 1);
+
+    if size(numMatchesAll, 2) ~= N
+        error('showAdjacencyGraphs:SquareMatrix', 'numMatchesAll must be an N-by-N matrix.');
+    end
+
+    % Ensure graph has the same number of nodes as the adjacency matrix
+    try
+        nG = numnodes(numMatchesG);
+    catch
+        error('showAdjacencyGraphs:InvalidGraph', 'Unable to determine number of nodes in numMatchesG.');
+    end
+
+    if nG ~= N
+        error('showAdjacencyGraphs:NodeMismatch', 'numMatchesG has %d nodes but numMatchesAll is %d-by-%d.', nG, N, N);
+    end
+
+    % Plot adjacency matrix (match counts)
+    figure('Name', 'Adjacency matrix');
+    imagesc(numMatchesAll);
+    axis equal tight;
+    colormap jet;
+    colorbar;
+    title('Match Counts (Adjacency Matrix View)');
+    xlabel('Image j');
+    ylabel('Image i');
+
+    % Plot graph view
+    figure('Name', 'Graph view');
+    plot(numMatchesG);
+    axis equal tight;
 end

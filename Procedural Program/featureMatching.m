@@ -34,6 +34,12 @@ function matches = featureMatching(input, allDescriptors, numImg)
     %
     % See also: matchFeatures, matchFeaturesScratch, ind2sub, triu, parfor
 
+    arguments
+        input struct
+        allDescriptors cell
+        numImg (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+    end
+
     % Initialize
     matches = cell(numImg);
     matSize = size(matches);
@@ -88,6 +94,12 @@ function matches = getMatches(input, features1, features2)
     %   - For the MATLAB matcher, MaxRatio applies Lowe's ratio test when applicable.
     %   - Indices are cast to double and transposed to produce a 2-by-K layout.
 
+    arguments
+        input struct
+        features1 {mustBeNumeric}
+        features2 {mustBeNumeric}
+    end
+
     if input.useMATLABFeatureMatch == 1
         matches = matchFeatures(features1, features2, 'Method', input.Matchingmethod, ...
             'MatchThreshold', input.Matchingthreshold, ...
@@ -105,5 +117,5 @@ function matches = getMatches(input, features1, features2)
             'ApproxKDBucketSize', 40);
     end
 
-    matches = double(matches)';
+    matches = double(matches);
 end

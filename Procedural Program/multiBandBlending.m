@@ -76,13 +76,16 @@ function F = multiBandBlending(Ci, Wi, levels, onGPU, sigma)
         Wsum = Wsum + Wi{k};
     end
 
-    epsW = 1e-8; mask_nz = (Wsum > epsW);
+    epsW = 1e-8; masknz = (Wsum > epsW);
 
     for k = 1:K
         Wn = zeros(size(Wi{k}), 'like', Wi{k});
-        Wn(mask_nz) = Wi{k}(mask_nz) ./ Wsum(mask_nz);
+        Wn(masknz) = Wi{k}(masknz) ./ Wsum(masknz);
         Wi{k} = Wn;
     end
+
+    % Clear weight normalization arrays
+    clear Wsum masknz Wn;
 
     % 3-channel internal
     [~, ~, C0] = size(Ci{1});
@@ -125,11 +128,11 @@ function F = multiBandBlending(Ci, Wi, levels, onGPU, sigma)
             newW = double(levW(l + 1));
 
             % blur, then downsample BOTH to exactly [newH newW]
-            Gc_blur = imgaussfilt(Gc, sigma, 'Padding', 'replicate');
-            Dc = imresize(Gc_blur, [newH newW], 'bilinear');
+            GcBlur = imgaussfilt(Gc, sigma, 'Padding', 'replicate');
+            Dc = imresize(GcBlur, [newH newW], 'bilinear');
 
-            Gw_blur = imgaussfilt(Gw, sigma, 'Padding', 'replicate');
-            Dw = imresize(Gw_blur, [newH newW], 'bilinear');
+            GwBlur = imgaussfilt(Gw, sigma, 'Padding', 'replicate');
+            Dw = imresize(GwBlur, [newH newW], 'bilinear');
 
             % upsample back to current level size (explicit!) and form Laplacian
             Uc = imresize(Dc, [hL wL], 'bilinear');
@@ -166,5 +169,10 @@ function F = multiBandBlending(Ci, Wi, levels, onGPU, sigma)
     % restore channels
     if C0 == 1, F = F3(:, :, 1); else, F = F3; end
     F = min(1, max(0, F));
+
+    % Gather to CPU if inputs were CPU
+    if onGPU && ~inputsOnGPU && isa(F, 'gpuArray')
+        F = gather(F);
+    end
 
 end

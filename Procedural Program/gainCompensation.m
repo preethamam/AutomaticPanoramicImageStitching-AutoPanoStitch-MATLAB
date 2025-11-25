@@ -1,7 +1,7 @@
-function gains = gainCompensation(images, cameras, mode, ref_idx, opts, ...
+function gains = gainCompensation(images, cameras, mode, refIdx, opts, ...
         H, W, u0, v0, th0, h0, ph0, srcW)
     % GAINCOMPENSATION Estimate per-image RGB gains using Brown–Lowe (2007) Eq. (29).
-    %   gains = gainCompensation(images, cameras, mode, ref_idx, opts, ...
+    %   gains = gainCompensation(images, cameras, mode, refIdx, opts, ...
     %           H, W, u0, v0, th0, h0, ph0, srcW) computes brightness gain factors
     %   for each image so that overlapping regions have consistent exposure. The
     %   method tiles a subsampled panorama grid, accumulates per-overlap statistics,
@@ -13,10 +13,10 @@ function gains = gainCompensation(images, cameras, mode, ref_idx, opts, ...
     %   - cameras   : 1xN or Nx1 struct array with fields R (3x3), K (3x3).
     %   - mode      : projection mode: 'planar' | 'cylindrical' | 'spherical' |
     %                 'equirectangular' | 'stereographic'.
-    %   - ref_idx   : reference camera index (positive integer).
+    %   - refIdx   : reference camera index (positive integer).
     %   - opts      : struct of options. Fields used include:
-    %                 overlap_stride, min_overlap_samples, sigma_N, sigma_g,
-    %                 lambda_diag, parfor_tiles, anchor_ref, tile, use_gpu, f_pan.
+    %                 overlapStride, minOverlapSamples, sigmaN, sigmag,
+    %                 lambdaDiag, parforTiles, anchorRef, tile, useGPU, fPan.
     %   - H, W      : panorama height and width (subsampled grid derives from stride).
     %   - u0, v0    : planar/stereographic center offsets.
     %   - th0, h0   : cylindrical base angles/height offsets.
@@ -27,8 +27,8 @@ function gains = gainCompensation(images, cameras, mode, ref_idx, opts, ...
     %   - gains     : N-by-3 single matrix of per-image RGB gains, clamped to [0.25, 4].
     %
     %   Notes
-    %   - We accumulate only per-edge statistics required by Eq.(29): counts N_ij and
-    %     channel sums over overlaps; means are recovered as sums / N_ij.
+    %   - We accumulate only per-edge statistics required by Eq.(29): counts Nij and
+    %     channel sums over overlaps; means are recovered as sums / Nij.
     %   - Tiling is done over a SUBSAMPLED grid to reduce memory; we never build full DWs.
     %   - GPU path keeps arrays on device and reduces there; final A/b assembly happens on CPU.
     %
@@ -38,7 +38,7 @@ function gains = gainCompensation(images, cameras, mode, ref_idx, opts, ...
         images cell
         cameras struct
         mode {mustBeTextScalar}
-        ref_idx (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+        refIdx (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
         opts (1, 1) struct
         H (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
         W (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
@@ -83,30 +83,30 @@ function gains = gainCompensation(images, cameras, mode, ref_idx, opts, ...
     gains = ones(N, 3, 'single');
 
     % -------- Defaults --------
-    if ~isfield(opts, 'overlap_stride'), opts.overlap_stride = 5; end
-    if ~isfield(opts, 'min_overlap_samples'), opts.min_overlap_samples = 50; end
-    if ~isfield(opts, 'sigma_N'), opts.sigma_N = 10.0; end
-    if ~isfield(opts, 'sigma_g'), opts.sigma_g = 0.1; end
-    if ~isfield(opts, 'lambda_diag'), opts.lambda_diag = 1e-8; end
-    if ~isfield(opts, 'parfor_tiles'), opts.parfor_tiles = false; end
-    if ~isfield(opts, 'anchor_ref'), opts.anchor_ref = false; end
+    if ~isfield(opts, 'overlapStride'), opts.overlapStride = 5; end
+    if ~isfield(opts, 'minOverlapSamples'), opts.minOverlapSamples = 50; end
+    if ~isfield(opts, 'sigmaN'), opts.sigmaN = 10.0; end
+    if ~isfield(opts, 'sigmag'), opts.sigmag = 0.1; end
+    if ~isfield(opts, 'lambdaDiag'), opts.lambdaDiag = 1e-8; end
+    if ~isfield(opts, 'parforTiles'), opts.parforTiles = false; end
+    if ~isfield(opts, 'anchorRef'), opts.anchorRef = false; end
     if ~isfield(opts, 'tile'), opts.tile = [512 512]; end
 
     % Auto GPU?
-    if ~isfield(opts, 'use_gpu')
-        opts.use_gpu = (gpuDeviceCount > 0);
+    if ~isfield(opts, 'useGPU')
+        opts.useGPU = (gpuDeviceCount > 0);
     end
 
-    stride = max(1, opts.overlap_stride);
-    minOv = max(1, opts.min_overlap_samples);
-    sN2 = (opts.sigma_N) ^ 2;
-    sg2 = (opts.sigma_g) ^ 2;
+    stride = max(1, opts.overlapStride);
+    minOv = max(1, opts.minOverlapSamples);
+    sN2 = (opts.sigmaN) ^ 2;
+    sg2 = (opts.sigmag) ^ 2;
 
     % -------- Subsampled grid size --------
-    xp_all = single(1:stride:W);
-    yp_all = single(1:stride:H);
-    Hs = numel(yp_all);
-    Ws = numel(xp_all);
+    xpAll = single(1:stride:W);
+    ypAll = single(1:stride:H);
+    Hs = numel(ypAll);
+    Ws = numel(xpAll);
 
     tileH = min(opts.tile(1), Hs);
     tileW = min(opts.tile(2), Ws);
@@ -114,46 +114,46 @@ function gains = gainCompensation(images, cameras, mode, ref_idx, opts, ...
     % -------- Accumulators (host/CPU) --------
     % For each (i,j), i<j:
     Nij = zeros(N, N, 'double'); % counts
-    sumCi_ij = zeros(N, N, 3, 'double'); % sum of Ci per channel
-    sumCj_ij = zeros(N, N, 3, 'double'); % sum of Cj per channel
+    sumCiij = zeros(N, N, 3, 'double'); % sum of Ci per channel
+    sumCjij = zeros(N, N, 3, 'double'); % sum of Cj per channel
 
     % -------- Tile enumeration over subsampled grid --------
-    x_tiles = 1:tileW:Ws;
-    y_tiles = 1:tileH:Hs;
+    xTiles = 1:tileW:Ws;
+    yTiles = 1:tileH:Hs;
 
     % To optionally run tiles in parallel:
     tileJobs = [];
 
-    for ty = y_tiles
+    for ty = yTiles
 
-        for tx = x_tiles
+        for tx = xTiles
             tileJobs(end + 1, :) = [ty, tx]; %#ok<AGROW>
         end
 
     end
 
     % -------- Run tiles (optionally parfor) --------
-    if opts.parfor_tiles
+    if opts.parforTiles
         % PARFOR over tiles (good when GPU not used or when GPU is busy elsewhere)
         parfor t = 1:size(tileJobs, 1)
-            [Nij_l, sCi_l, sCj_l] = do_one_tile(tileJobs(t, 1), tileJobs(t, 2), opts, mode, ref_idx, cameras, ...
+            [NijL, sCiL, sCjL] = processOneTile(tileJobs(t, 1), tileJobs(t, 2), opts, mode, refIdx, cameras, ...
                 u0, v0, th0, h0, ph0, srcW, images, tileH, tileW, ...
-                Hs, Ws, xp_all, yp_all, N);
+                Hs, Ws, xpAll, ypAll, N);
             % Accumulate into master (parfor requires reduction variables)
-            Nij = Nij + Nij_l;
-            sumCi_ij = sumCi_ij + sCi_l;
-            sumCj_ij = sumCj_ij + sCj_l;
+            Nij = Nij + NijL;
+            sumCiij = sumCiij + sCiL;
+            sumCjij = sumCjij + sCjL;
         end
 
     else
 
         for t = 1:size(tileJobs, 1)
-            [Nij_l, sCi_l, sCj_l] = do_one_tile(tileJobs(t, 1), tileJobs(t, 2), opts, mode, ref_idx, cameras, ...
+            [NijL, sCiL, sCjL] = processOneTile(tileJobs(t, 1), tileJobs(t, 2), opts, mode, refIdx, cameras, ...
                 u0, v0, th0, h0, ph0, srcW, images, tileH, tileW, ...
-                Hs, Ws, xp_all, yp_all, N);
-            Nij = Nij + Nij_l;
-            sumCi_ij = sumCi_ij + sCi_l;
-            sumCj_ij = sumCj_ij + sCj_l;
+                Hs, Ws, xpAll, ypAll, N);
+            Nij = Nij + NijL;
+            sumCiij = sumCiij + sCiL;
+            sumCjij = sumCjij + sCjL;
         end
 
     end
@@ -187,16 +187,16 @@ function gains = gainCompensation(images, cameras, mode, ref_idx, opts, ...
         if Kij < minOv, continue; end
 
         % Means
-        Ibar_ij = reshape(sumCi_ij(i, j, :), [1 3]) / Kij; % mean Ci on (i,j)
-        Ibar_ji = reshape(sumCj_ij(i, j, :), [1 3]) / Kij; % mean Cj on (i,j)
+        Ibarij = reshape(sumCiij(i, j, :), [1 3]) / Kij; % mean Ci on (i,j)
+        Ibarji = reshape(sumCjij(i, j, :), [1 3]) / Kij; % mean Cj on (i,j)
 
         wN = double(Kij) / sN2; % data weight
         wG = double(Kij) / sg2; % prior weight (paper multiplies by Nij)
 
         for ch = 1:3
-            aii = wN * (Ibar_ij(ch) * Ibar_ij(ch)) + wG;
-            ajj = wN * (Ibar_ji(ch) * Ibar_ji(ch)) + wG;
-            aij =- wN * (Ibar_ij(ch) * Ibar_ji(ch));
+            aii = wN * (Ibarij(ch) * Ibarij(ch)) + wG;
+            ajj = wN * (Ibarji(ch) * Ibarji(ch)) + wG;
+            aij =- wN * (Ibarij(ch) * Ibarji(ch));
 
             A(i, i, ch) = A(i, i, ch) + aii;
             A(j, j, ch) = A(j, j, ch) + ajj;
@@ -210,11 +210,11 @@ function gains = gainCompensation(images, cameras, mode, ref_idx, opts, ...
     end
 
     % Optional hard anchor to pin the reference gain to 1
-    if opts.anchor_ref
-        pin = max(1, min(N, ref_idx));
+    if opts.anchorRef
+        pin = max(1, min(N, refIdx));
 
         for ch = 1:3
-            A(:, :, ch) = A(:, :, ch) + opts.lambda_diag * eye(N);
+            A(:, :, ch) = A(:, :, ch) + opts.lambdaDiag * eye(N);
             A(pin, :, ch) = 0; A(:, pin, ch) = 0; A(pin, pin, ch) = 1e6;
         end
 
@@ -222,7 +222,7 @@ function gains = gainCompensation(images, cameras, mode, ref_idx, opts, ...
     else
 
         for ch = 1:3
-            A(:, :, ch) = A(:, :, ch) + opts.lambda_diag * eye(N);
+            A(:, :, ch) = A(:, :, ch) + opts.lambdaDiag * eye(N);
         end
 
     end
@@ -236,23 +236,43 @@ function gains = gainCompensation(images, cameras, mode, ref_idx, opts, ...
 end % gainCompensation
 
 % -------- Per-tile worker (nested for clarity) --------
-function [Nij_loc, sumCi_loc, sumCj_loc] = do_one_tile(ty, tx, opts, mode, ref_idx, cameras, ...
+function [Nijloc, sumCiloc, sumCjloc] = processOneTile(ty, tx, opts, mode, refIdx, cameras, ...
         u0, v0, th0, h0, ph0, weights, imgs, tileH, tileW, ...
-        Hs, Ws, xp_all, yp_all, N)
-    % DO_ONE_TILE Accumulate overlap statistics for a single subsampled tile.
-    %   [Nij_loc, sumCi_loc, sumCj_loc] = do_one_tile(ty, tx, opts, mode, ref_idx, cameras,
-    %       u0, v0, th0, h0, ph0, weights, imgs, tileH, tileW, Hs, Ws, xp_all, yp_all, N)
+        Hs, Ws, xpAll, ypAll, N)
+    % PROCESSONETILE Accumulate overlap statistics for a single subsampled tile.
+    %   [Nijloc, sumCiloc, sumCjloc] = processOneTile(ty, tx, opts, mode, refIdx, cameras,
+    %       u0, v0, th0, h0, ph0, weights, imgs, tileH, tileW, Hs, Ws, xpAll, ypAll, N)
     %   computes, for the tile starting at (ty, tx) on the subsampled grid, the
     %   per-pair overlap counts and per-channel color sums needed for gain solving.
     %
-    %   Outputs are double and sized to N-by-N (and N-by-N-by-3 for color sums).
+    %   Inputs:
+    %   - ty:       starting y-index (subsampled grid) for this tile
+    %   - tx:       starting x-index (subsampled grid) for this tile
+    %   - opts:     options struct (fields used: fPan, useGPU, ...)
+    %   - mode:     projection mode string
+    %   - refIdx:   reference camera index
+    %   - cameras:  camera struct array
+    %   - u0,v0:    planar/stereographic center offsets
+    %   - th0,h0:   cylindrical parameters (theta base, height offset)
+    %   - ph0:      spherical/equirectangular latitude offset
+    %   - weights:  cell array of single-channel coverage/weight maps (srcW)
+    %   - imgs:     cell array of RGB images
+    %   - tileH,tileW: tile size in subsampled pixels
+    %   - Hs,Ws:    subsampled panorama grid height and width
+    %   - xpAll,ypAll: subsampled grid coordinate vectors
+    %   - N:        number of images
+    %
+    %   Outputs:
+    %   - Nijloc:   N-by-N double matrix of per-pair overlap counts
+    %   - sumCiloc: N-by-N-by-3 double matrix of summed Ci values over overlaps
+    %   - sumCjloc: N-by-N-by-3 double matrix of summed Cj values over overlaps
 
     arguments
         ty (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
         tx (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
         opts (1, 1) struct
         mode {mustBeTextScalar}
-        ref_idx (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+        refIdx (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
         cameras struct
         u0
         v0
@@ -265,20 +285,20 @@ function [Nij_loc, sumCi_loc, sumCj_loc] = do_one_tile(ty, tx, opts, mode, ref_i
         tileW (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
         Hs (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
         Ws (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
-        xp_all (:, 1) {mustBeNumeric, mustBeFinite}
-        yp_all (:, 1) {mustBeNumeric, mustBeFinite}
+        xpAll (:, 1) {mustBeNumeric, mustBeFinite}
+        ypAll (:, 1) {mustBeNumeric, mustBeFinite}
         N (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
     end
 
     % ranges in subsampled-index space
     y2 = min(ty + tileH - 1, Hs);
     x2 = min(tx + tileW - 1, Ws);
-    yy = yp_all(ty:y2); xx = xp_all(tx:x2);
-    [xp_s, yp_s] = meshgrid(xx, yy); % small tile grid (subsampled)
+    yy = ypAll(ty:y2); xx = xpAll(tx:x2);
+    [xpS, ypS] = meshgrid(xx, yy); % small tile grid (subsampled)
 
     % Build world directions for this tile (on chosen device)
-    [DWx, DWy, DWz] = pano_dirs_for_grid_tile(xp_s, yp_s, mode, ref_idx, cameras, ...
-        opts.f_pan, u0, v0, th0, h0, ph0, opts.use_gpu);
+    [DWx, DWy, DWz] = panoDirsGridTile(xpS, ypS, mode, refIdx, cameras, ...
+        opts.fPan, u0, v0, th0, h0, ph0, opts.useGPU);
 
     DWs = cat(3, DWx, DWy, DWz);
 
@@ -287,18 +307,18 @@ function [Nij_loc, sumCi_loc, sumCj_loc] = do_one_tile(ty, tx, opts, mode, ref_i
 
     % Project into each image and compute coverage from srcW
     for i = 1:N
-        [u_i, v_i, front_i] = project_to_image(DWs, cameras(i), opts.use_gpu);
-        % Sample srcW{i} (single-channel) at (u_i,v_i). Returns [HW x 1]
-        Wi = sample_linear(weights{i}, u_i, v_i, size(xp_s), opts.use_gpu);
+        [ui, vi, fronti] = projectToImage(DWs, cameras(i), opts.useGPU);
+        % Sample srcW{i} (single-channel) at (ui,vi). Returns [HW x 1]
+        Wi = sampleLinear(weights{i}, ui, vi, size(xpS), opts.useGPU);
 
-        Mi = isfinite(Wi) & (Wi > 0) & front_i & isfinite(u_i) & isfinite(v_i);
-        uL{i} = u_i; vL{i} = v_i; cov{i} = Mi;
+        Mi = isfinite(Wi) & (Wi > 0) & fronti & isfinite(ui) & isfinite(vi);
+        uL{i} = ui; vL{i} = vi; cov{i} = Mi;
     end
 
     % Accumulators local to the tile (host-friendly at end)
-    Nij_loc = zeros(N, N, 'double');
-    sumCi_loc = zeros(N, N, 3, 'double');
-    sumCj_loc = zeros(N, N, 3, 'double');
+    Nijloc = zeros(N, N, 'double');
+    sumCiloc = zeros(N, N, 3, 'double');
+    sumCjloc = zeros(N, N, 3, 'double');
 
     % For each pair (i,j), accumulate only the sums and counts
     for i = 1:N - 1
@@ -320,11 +340,11 @@ function [Nij_loc, sumCi_loc, sumCj_loc] = do_one_tile(ty, tx, opts, mode, ref_i
             if isempty(idx), continue; end
 
             % Sample colors for i,j at these idx only (device)
-            ui_s = ui(idx); vi_s = vi(idx);
-            uj_s = uL{j}(idx); vj_s = vL{j}(idx);
+            uis = ui(idx); vis = vi(idx);
+            ujs = uL{j}(idx); vjs = vL{j}(idx);
 
-            Ci = sample_linear_rgb(single(imgs{i}), ui_s, vi_s, opts.use_gpu); % [K x 3]
-            Cj = sample_linear_rgb(single(imgs{j}), uj_s, vj_s, opts.use_gpu);
+            Ci = sampleLinearRGB(single(imgs{i}), uis, vis, opts.useGPU); % [K x 3]
+            Cj = sampleLinearRGB(single(imgs{j}), ujs, vjs, opts.useGPU);
 
             % Filter any non-finites (rare; NaNs from borders)
             good = all(isfinite(Ci), 2) & all(isfinite(Cj), 2);
@@ -337,88 +357,111 @@ function [Nij_loc, sumCi_loc, sumCj_loc] = do_one_tile(ty, tx, opts, mode, ref_i
             sCi = double(gather(sum(Ci, 1)));
             sCj = double(gather(sum(Cj, 1)));
 
-            Nij_loc(i, j) = Nij_loc(i, j) + k;
-            sumCi_loc(i, j, :) = sumCi_loc(i, j, :) + reshape(sCi, [1, 1, 3]);
-            sumCj_loc(i, j, :) = sumCj_loc(i, j, :) + reshape(sCj, [1, 1, 3]);
+            Nijloc(i, j) = Nijloc(i, j) + k;
+            sumCiloc(i, j, :) = sumCiloc(i, j, :) + reshape(sCi, [1, 1, 3]);
+            sumCjloc(i, j, :) = sumCjloc(i, j, :) + reshape(sCj, [1, 1, 3]);
         end
 
     end
 
 end
 
-function [dwx, dwy, dwz] = pano_dirs_for_grid_tile(xp_s, yp_s, mode, ...
-        ref_idx, cameras, f_pan, u0, v0, ...
+function [dwx, dwy, dwz] = panoDirsGridTile(xps, yps, mode, ...
+        refIdx, cameras, fPan, u0, v0, ...
         th0, h0, ph0, useGPU)
-    % PANO_DIRS_FOR_GRID_TILE Compute world direction vectors for a pano grid tile.
-    %   [dwx, dwy, dwz] = pano_dirs_for_grid_tile(xp_s, yp_s, mode, ref_idx, cameras,
-    %       f_pan, u0, v0, th0, h0, ph0, useGPU) returns per-pixel world direction
+    % PANODIRSGRIDTILE Compute world direction vectors for a pano grid tile.
+    %   [dwx, dwy, dwz] = panoDirsGridTile(xps, yps, mode, refIdx, cameras,
+    %       fPan, u0, v0, th0, h0, ph0, useGPU) returns per-pixel world direction
     %   vectors for the given projection mode, relative to a reference camera.
     %
-    %   Returns three arrays of the same size as xp_s/yp_s containing the x/y/z
+    %   Returns three arrays of the same size as xps/yps containing the x/y/z
     %   components of the direction vectors.
+    %
+    %   Inputs:
+    %   - xps, yps: matrices of subsampled panorama grid coordinates for the tile
+    %   - mode:     projection mode string
+    %   - refIdx:   reference camera index
+    %   - cameras:  camera struct array
+    %   - fPan:     focal/scale parameter for panorama projection
+    %   - u0,v0:    planar/stereographic center offsets
+    %   - th0,h0:   cylindrical parameters (theta base, height offset)
+    %   - ph0:      spherical/equirectangular latitude offset
+    %   - useGPU:   logical flag to perform computations on GPU
+    %
+    %   Outputs:
+    %   - dwx,dwy,dwz: arrays matching xps/yps with world direction components (x,y,z)
 
     arguments
-        xp_s (:, :) {mustBeNumeric, mustBeFinite}
-        yp_s (:, :) {mustBeNumeric, mustBeFinite}
+        xps (:, :) {mustBeNumeric, mustBeFinite}
+        yps (:, :) {mustBeNumeric, mustBeFinite}
         mode {mustBeTextScalar}
-        ref_idx (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+        refIdx (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
         cameras struct
-        f_pan (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
-        u0 
-        v0 
+        fPan (1, 1) {mustBeNumeric, mustBeFinite, mustBePositive}
+        u0
+        v0
         th0
-        h0 
+        h0
         ph0
         useGPU (1, 1) logical
     end
 
     if useGPU
-        xp_s = gpuArray(xp_s); yp_s = gpuArray(yp_s);
+        xps = gpuArray(xps); yps = gpuArray(yps);
     end
 
     switch lower(mode)
-        case 'planar'
-            u = single(u0) + xp_s / single(f_pan);
-            v = single(v0) + yp_s / single(f_pan);
-            dx_ref = u; dy_ref = v; dz_ref = ones(size(u), 'like', u);
-            Rref = single(cameras(ref_idx).R);
+        case {'planar', 'perspective'}
+            u = single(u0) + xps / single(fPan);
+            v = single(v0) + yps / single(fPan);
+            dxRef = u; dyRef = v; dzRef = ones(size(u), 'like', u);
+            Rref = single(cameras(refIdx).R);
             Rt = Rref.';
-            dwx = Rt(1, 1) * dx_ref + Rt(1, 2) * dy_ref + Rt(1, 3) * dz_ref;
-            dwy = Rt(2, 1) * dx_ref + Rt(2, 2) * dy_ref + Rt(2, 3) * dz_ref;
-            dwz = Rt(3, 1) * dx_ref + Rt(3, 2) * dy_ref + Rt(3, 3) * dz_ref;
+            dwx = Rt(1, 1) * dxRef + Rt(1, 2) * dyRef + Rt(1, 3) * dzRef;
+            dwy = Rt(2, 1) * dxRef + Rt(2, 2) * dyRef + Rt(2, 3) * dzRef;
+            dwz = Rt(3, 1) * dxRef + Rt(3, 2) * dyRef + Rt(3, 3) * dzRef;
         case 'cylindrical'
-            theta = single(th0) + xp_s / single(f_pan);
-            h = single(h0) + yp_s / single(f_pan);
-            dwx = -sin(theta); dwy = -h; dwz = cos(theta);
+            theta = single(th0) + xps / single(fPan);
+            h = single(h0) + yps / single(fPan);
+            dwx = sin(theta); dwy = h; dwz = cos(theta);
         case {'spherical', 'equirectangular'}
-            theta = single(th0) + xp_s / single(f_pan);
-            phi = single(ph0) + yp_s / single(f_pan);
+            theta = single(th0) + xps / single(fPan);
+            phi = single(ph0) + yps / single(fPan);
             cphi = cos(phi); sphi = sin(phi);
-            dwx = -cphi .* sin(theta); dwy = -sphi; dwz = cphi .* cos(theta);
+            dwx = cphi .* sin(theta); dwy = sphi; dwz = cphi .* cos(theta);
         case 'stereographic'
-            a = single(u0) + xp_s / single(f_pan);
-            b = single(v0) + yp_s / single(f_pan);
+            a = single(u0) + xps / single(fPan);
+            b = single(v0) + yps / single(fPan);
             r2 = a .* a + b .* b; denom = 1 + r2;
-            dx_ref = 2 * a ./ denom;
-            dy_ref = 2 * b ./ denom;
-            dz_ref = (1 - r2) ./ denom;
-            Rref = single(cameras(ref_idx).R);
+            dxRef = 2 * a ./ denom;
+            dyRef = 2 * b ./ denom;
+            dzRef = (1 - r2) ./ denom;
+            Rref = single(cameras(refIdx).R);
             Rt = Rref.';
-            dwx = Rt(1, 1) * dx_ref + Rt(1, 2) * dy_ref + Rt(1, 3) * dz_ref;
-            dwy = Rt(2, 1) * dx_ref + Rt(2, 2) * dy_ref + Rt(2, 3) * dz_ref;
-            dwz = Rt(3, 1) * dx_ref + Rt(3, 2) * dy_ref + Rt(3, 3) * dz_ref;
+            dwx = Rt(1, 1) * dxRef + Rt(1, 2) * dyRef + Rt(1, 3) * dzRef;
+            dwy = Rt(2, 1) * dxRef + Rt(2, 2) * dyRef + Rt(2, 3) * dzRef;
+            dwz = Rt(3, 1) * dxRef + Rt(3, 2) * dyRef + Rt(3, 3) * dzRef;
         otherwise
             error('Unknown mode "%s"', mode);
     end
 
 end
 
-function [u, v, front] = project_to_image(DWs, cam, useGPU)
-    % PROJECT_TO_IMAGE Project world direction vectors into a camera image.
-    %   [u, v, front] = project_to_image(DWs, cam, useGPU) projects the world
+function [u, v, front] = projectToImage(DWs, cam, useGPU)
+    % PROJECTTOIMAGE Project world direction vectors into a camera image.
+    %   [u, v, front] = projectToImage(DWs, cam, useGPU) projects the world
     %   directions DWs (HxWx3 or [M x N x 3]) into pixel coordinates using the
     %   camera intrinsics K and orientation R. Returns pixel arrays u, v and a
     %   logical mask 'front' for directions with positive z in camera space.
+    %
+    %   Inputs:
+    %   - DWs:  array of world direction vectors (HxWx3 or MxNx3)
+    %   - cam:  camera struct with fields R (3x3) and K (3x3)
+    %   - useGPU: logical flag indicating GPU arrays expected
+    %
+    %   Outputs:
+    %   - u,v:  column vectors of projected pixel coordinates (u = x, v = y)
+    %   - front: logical mask indicating directions in front of the camera (z>0)
 
     arguments
         DWs (:, :, :) {mustBeNumeric}
@@ -427,11 +470,11 @@ function [u, v, front] = project_to_image(DWs, cam, useGPU)
     end
 
     if size(DWs, 3) ~= 3
-        error('project_to_image:DWsShape', 'DWs must be an array with size(DWs,3) == 3.');
+        error('projectToImage:DWsShape', 'DWs must be an array with size(DWs,3) == 3.');
     end
 
     if ~isfield(cam, 'R') || ~isfield(cam, 'K')
-        error('project_to_image:CamFields', 'cam struct must contain fields R and K.');
+        error('projectToImage:CamFields', 'cam struct must contain fields R and K.');
     end
 
     DW = reshape(DWs, [], 3); % [M x 3]
@@ -440,14 +483,14 @@ function [u, v, front] = project_to_image(DWs, cam, useGPU)
     R = single(cam.R);
     K = single(cam.K);
 
-    dir_c = DW * R.'; % world -> camera
-    cx_w = dir_c(:, 1);
-    cy_w = dir_c(:, 2);
-    cz_w = dir_c(:, 3);
+    dirC = DW * R.'; % world -> camera
+    cxW = dirC(:, 1);
+    cyW = dirC(:, 2);
+    czW = dirC(:, 3);
 
-    front = cz_w > 1e-6;
-    u = K(1, 1) * (cx_w ./ cz_w) + K(1, 3);
-    v = K(2, 2) * (cy_w ./ cz_w) + K(2, 3);
+    front = czW > 1e-6;
+    u = K(1, 1) * (cxW ./ czW) + K(1, 3);
+    v = K(2, 2) * (cyW ./ czW) + K(2, 3);
 
     if useGPU
         % nothing to do; already on GPU
@@ -458,12 +501,21 @@ function [u, v, front] = project_to_image(DWs, cam, useGPU)
 
 end
 
-function S = sample_linear(I, u, v, tileHW, useGPU)
-    % SAMPLE_LINEAR Bilinear sampler for single-channel images with NaN extrapolation.
-    %   S = sample_linear(I, u, v, tileHW, useGPU) samples the single-channel
+function S = sampleLinear(I, u, v, tileHW, useGPU)
+    % SAMPLELINEAR Bilinear sampler for single-channel images with NaN extrapolation.
+    %   S = sampleLinear(I, u, v, tileHW, useGPU) samples the single-channel
     %   image/map I at floating-point pixel coordinates (u,v) using bilinear
     %   interpolation. Out-of-range values are set to NaN. The result is a
     %   column vector matching the number of query points.
+    %
+    %   Inputs:
+    %   - I:      single-channel image or map (HxW)
+    %   - u,v:    column vectors of floating-point sample x,y coordinates
+    %   - tileHW: size of the tile as [height, width] (unused except for signature)
+    %   - useGPU: logical flag indicating whether to use GPU arrays
+    %
+    %   Outputs:
+    %   - S:      column vector of sampled values (NaN for out-of-range)
 
     arguments
         I (:, :) {mustBeNumeric}
@@ -472,9 +524,6 @@ function S = sample_linear(I, u, v, tileHW, useGPU)
         tileHW (1, 2) {mustBeNumeric}
         useGPU (1, 1) logical
     end
-
-    % Touch tileHW to avoid unused-arg warning when validating signature
-    tileHW = tileHW; %#ok<NASGU>
 
     % Single-channel sampler (srcW)
     [hh, ww, ~] = size(I); %#ok<ASGLU>
@@ -490,11 +539,19 @@ function S = sample_linear(I, u, v, tileHW, useGPU)
     S = reshape(S, [], 1); % [HW x 1] or [K x 1]
 end
 
-function S = sample_linear_rgb(I, u, v, useGPU)
-    % SAMPLE_LINEAR_RGB Bilinear sampler for RGB images with NaN extrapolation.
-    %   S = sample_linear_rgb(I, u, v, useGPU) samples the RGB image I at
+function S = sampleLinearRGB(I, u, v, useGPU)
+    % SAMPLELINEARRGB Bilinear sampler for RGB images with NaN extrapolation.
+    %   S = sampleLinearRGB(I, u, v, useGPU) samples the RGB image I at
     %   floating-point pixel coordinates (u,v) and returns a K-by-3 array where
     %   each row contains the sampled RGB values. Out-of-range values are NaN.
+    %
+    %   Inputs:
+    %   - I:      RGB image (HxWx3)
+    %   - u,v:    column vectors of floating-point sample x,y coordinates
+    %   - useGPU: logical flag indicating whether to use GPU arrays
+    %
+    %   Outputs:
+    %   - S:      K-by-3 array of sampled RGB values (NaN for out-of-range)
 
     arguments
         I (:, :, :) {mustBeNumeric}

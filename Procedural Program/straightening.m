@@ -1,4 +1,4 @@
-function straightenedTforms = straightening(ccbundlerTforms)
+function straightenedTforms = straightening(input, ccbundlerTforms)
     % STRAIGHTENING Align camera rotations so the panorama appears upright.
     %   straightenedTforms = straightening(ccbundlerTforms) computes a single
     %   global rotation per connected component of cameras/images so that the
@@ -32,6 +32,7 @@ function straightenedTforms = straightening(ccbundlerTforms)
     %   See also svd, cross, norm
 
     arguments
+        input (1, 1) struct 
         ccbundlerTforms cell
     end
 
@@ -76,23 +77,29 @@ function straightenedTforms = straightening(ccbundlerTforms)
 
         cams = ccbundlerTforms{cc};
 
+         % Check if the panorama has translation
+        if cams(1).noRotation == 1 || input.forcePlanarScan || ~input.straightenPanoramas
+            % Store straightened cameras/images
+            straightenedTforms{cc} = cams;
+            continue, 
+        end
+
         % Collect each camera's X-axis in WORLD coords (R: world->cam ⇒ row 1)
         X = cell2mat(arrayfun(@(c) c.R(1, 1:3)', cams, 'UniformOutput', false));
         C = X * X.'; % sum_i X_i X_i^T
         [~, ~, V] = svd(C);
         up = V(:, end); % "up" direction (smallest singular)
 
-        % FIX: Check if "up" is actually pointing down, and flip if necessary
+        % Check if "up" is actually pointing down, and flip if necessary
         % Robust heuristic: "up" should be opposite to the average camera Y-axis
         % (camera Y-axis points down in the image, so world "up" should be opposite)
-        Y_axes = cell2mat(arrayfun(@(c) c.R(2, 1:3)', cams, 'UniformOutput', false));
-        avg_Y = mean(Y_axes, 2);
-        avg_Y = avg_Y / norm(avg_Y);
+        Yaxes = cell2mat(arrayfun(@(c) c.R(2, 1:3)', cams, 'UniformOutput', false));
+        avgY = mean(Yaxes, 2);
+        avgY = avgY / norm(avgY);
 
-        if dot(up, avg_Y) > 0
+        if dot(up, avgY) < 0
             % "up" is pointing in same direction as downward camera Y-axes, so flip it
             up = -up;
-            fprintf('  Straightening component %d: flipped "up" direction\n', cc);
         end
 
         % Average Z (world)
@@ -126,10 +133,37 @@ function straightenedTforms = straightening(ccbundlerTforms)
                 % World basis whose Y is "up"
                 B = [xhat, up, zhat];
                 % Global rotation that maps this basis to canonical axes
-                S = B; % transpose is the rotation we want
+                S = B; % global rotation we want
             end
 
         end
+
+        % Check if straightening is necessary
+        %----------------------------------------------------------------------------------
+        % Compute rotation angle of S using trace
+        thetaRad = acos(max(-1, min(1, (trace(S) - 1) / 2)));
+        thetaDeg = rad2deg(thetaRad);
+        
+        % Check the up direction orientation
+        upDotWorldUp = abs(dot(up, [0; 1; 0]));
+        upAngleDeg = rad2deg(acos(max(-1, min(1, upDotWorldUp))));
+                       
+        % Decision logic based primarily on up-angle
+        if upAngleDeg > input.straighteningUpangleT(1) && upAngleDeg < input.straighteningUpangleT(3)
+            % Computed "up" is nearly horizontal - intentional vertical/horizontal pano
+            fprintf('Connected Component %d: Skipping straightening vertical/horizontal (rotation=%.1f°, up-angle=%.1f°)\n', cc, thetaDeg, upAngleDeg);
+            straightenedTforms{cc} = cams;
+            continue;
+        elseif upAngleDeg > input.straighteningUpangleT(2) && thetaDeg > input.straighteningThetaT
+            % Both metrics suggest extreme distortion
+            fprintf('Connected Component %d: Skipping straightening extreme distortion (rotation=%.1f°, up-angle=%.1f°)\n', cc, thetaDeg, upAngleDeg);
+            straightenedTforms{cc} = cams;
+            continue;
+        end
+        
+        % Print Applying straightening prompt
+        fprintf('Connected Component %d: Applying straightening (rotation=%.1f°, up-angle=%.1f°)\n', ...
+            cc, thetaDeg, upAngleDeg);
 
         % Apply the *same* world-frame change to every camera
         for k = 1:numel(cams)
@@ -139,5 +173,4 @@ function straightenedTforms = straightening(ccbundlerTforms)
         % Store straightened cameras/images
         straightenedTforms{cc} = cams;
     end
-
 end

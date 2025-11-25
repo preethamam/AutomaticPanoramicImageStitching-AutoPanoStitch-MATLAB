@@ -68,6 +68,11 @@ function panoStore = cropNsavePanorama(input, panoStore, myImg, datasetName)
         error('cropNsavePanorama:MissingTransformationType', 'input.transformationType is required when input.imageWrite is true.');
     end
 
+    % Make directorty if it doesn't exist
+    if ~exist(input.imageSaveFolder, 'dir') && input.imageWrite
+        mkdir(input.imageSaveFolder);
+    end
+
     for ii = 1:numel(panoStore)
         % Panorama cropper
         if input.cropPanorama == 1
