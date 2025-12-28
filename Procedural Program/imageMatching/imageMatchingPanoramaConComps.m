@@ -78,8 +78,12 @@ if input.resizeImage == 1 && input.resizeImagePanoramaCluster == 1 && numel(ccBi
     end
 
     % Get the matched features for panorama connected components
-    % compliant images
-    featurMatchesPanConComp = featureMatching(input, allDescriptors, numImgs);
+    % compliant images    
+    if input.matchFeaturesPairwise == true
+        featurMatchesPanConComp = featureMatchingPairwise(input, allDescriptors, numImgs);
+    else
+        featurMatchesPanConComp = featureMatchingGlobal(input, allDescriptors, numImgs);
+    end
 
     % Second pass matching for panorama connected components compliant
     [allMatchesRefined, numMatches, initialTforms] = imageMatching(input, numImgs, ...

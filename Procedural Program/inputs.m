@@ -18,7 +18,7 @@ end
 
 % Folder name that consists of the images set
 folderName = '';
-input.imageSaveFolder = '..\..\..\..\..\..\Team Work\Team CrackSTITCH\Results\AutoPanoStitch\Spherical 07 - MyTforms Maxmatches 300 MaxIter 40';
+input.imageSaveFolder = '..\..\..\..\..\..\Team Work\Team CrackSTITCH\Results\AutoPanoStitch\Spherical 09 - MyTforms Maxmatches 300 MaxIter 100';
 
 %% Inputs 2
 %--------------------------------------------------------------------------
@@ -29,6 +29,8 @@ input.poolType = 'numcores';                                 % 'numcores' | 'Thr
 %% Inputs 3
 % Feature extraction (SIFT recommended as you get large number of consistent features)
 input.detector = 'SIFT';                                % 'SIFT' | 'vl_SIFT' | 'HARRIS' | 'FAST' | 'SURF' | 'BRISK' | 'ORB' | 'KAZE'
+                                                        % Non-binary: 'SIFT' | 'vl_SIFT' | 'SURF' | 'KAZE'
+                                                        % Binary: 'HARRIS' | 'FAST' | 'BRISK' | 'ORB'
 input.Sigma = 1.6;                                      % Sigma of the Gaussian (1.4142135623)
 input.NumLayersInOctave = 4;                            % Number of layers in each octave -- SIFT only
 input.ContrastThreshold = 0.00133;                      % Contrast threshold for selecting the strongest features,
@@ -39,11 +41,14 @@ input.EdgeThreshold = 6;                                % Edge threshold, specif
                                                         % The threshold is used to filter out unstable edge-like features  -- SIFT only
 
 % Features matching
-input.useMATLABFeatureMatch = 0;                        % Use MATLAB default matchFeatures function: 0-off | 1-on (very fast)
+input.k = 4;                                            % Brown-Lowe uses k=4
+input.BFMatch = 0;                                      % Brute-force matcher for the binary features in global feature matching
+input.matchFeaturesPairwise = 0;                        % Match features by pairwise images or globally
+input.useMATLABFeatureMatch = 1;                        % Use MATLAB default matchFeatures function: 0-off | 1-on (very fast)
 input.Matchingmethod = 'Approximate';                   % 'Exhaustive' (default) | 'Approximate'
 input.ApproxFloatNNMethod = 'subsetpdist2';             % Nearset neighbor finding methods: 'pca2nn' 'subsetpdist2'; 'kdtree'
-                                                                            % Speed: fast | slow | super slow
-                                                                            % Accuracy: ordinary | very accurate | very accurate
+                                                        % Speed: fast | slow | super slow
+                                                        % Accuracy: ordinary | very accurate | very accurate
 input.Matchingthreshold = 1.5;                          % 10.0 or 1.0 (default) | percent value in the range (0, 100] | depends on
 
                                                         % binary and non-binary features. 
@@ -57,10 +62,11 @@ input.ApproxProbes = 8;                                 % Binary features number
 input.useMATLABImageMatching = 0;                       % Use MATLAB default estgeotform2d function: 0-off | 1-on
 input.imageMatchingMethod = 'ransac';                   % 'ransac' | 'mlesac'. RANSAC or MLESAC. Both gives consistent matches.
                                                         % MLESAC - recommended. As it has some tight bounds and validation checks.
+input.mBrownLowe = 6;                                   % Potential image matches (Brown-Lowe use m = 6)
 
 % RANSAC execution time for projective case is ~1.35 times higher than MLESAC.
 input.maxIter = 500;                                    % RANSAC/MLESAC maximum iterations
-input.maxDistance = 3.5;                                % Maximum distance (pixels) increase this to get more matches. Default: 1.5
+input.maxDistance = 5.5;                                % Maximum distance (pixels) increase this to get more matches. Default: 1.5
                                                         % For large image RANSAC/MLESAC requires maxDistance 1-3+ pixels
                                                         % more than the default value of 3.5 pixels.
 input.inliersConfidence = 99.9;                         % Inlier confidence [0, 100]

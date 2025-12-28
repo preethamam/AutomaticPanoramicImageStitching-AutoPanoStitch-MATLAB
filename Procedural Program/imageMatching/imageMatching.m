@@ -67,42 +67,62 @@ function [allMatches, numMatches, tforms] = imageMatching(input, n, keypoints, m
         error('imageMatching:InvalidImagesLength', 'images must contain n elements (one per image).');
     end
 
-    % Initialize
+    % Initialize outputs
     allMatches = cell(n);
     numMatches = zeros(n);
-    matSize = size(allMatches);
-
-    % Use symmetry and run for upper triangular matrix
-    linearIdxs = reshape(1:numel(allMatches), size(allMatches));
-    IuptriIdx = nonzeros(triu(linearIdxs, 1));
-    IlowtriIdx = nonzeros(triu(linearIdxs', 1));
-
-    % Initialize
-    allMatches_temp = cell(1, length(IuptriIdx));
-    numMatches_temp = zeros(1, length(IuptriIdx));
-
-    % Initialize transformation matrix
     tforms = cell(n, n);
-    tforms_ij = cell(1, length(IuptriIdx));
-    tforms_ji = cell(1, length(IuptriIdx));
 
-    % Minimum number of features/keypoints
-    if strcmp(input.transformationType, 'translation')
-        nfmin = 1;
-    elseif strcmp(input.transformationType, 'rigid') || strcmp(input.transformationType, 'similarity')
-        nfmin = 2;
-    elseif strcmp(input.transformationType, 'affine')
-        nfmin = 3;
-    else
-        nfmin = 4;
+    % Count putative matches per pair
+    putativeCount = cellfun(@(x) size(x,1), matchesAll);
+
+    % Top-m candidate selection (Brown-Lowe: m=6)
+    m = input.mBrownLowe;
+    
+    % Symmetric counts matrix
+    symCounts = putativeCount + putativeCount';
+    symCounts(1:n+1:end) = 0;  % zero diagonal
+    
+    % Sort each row descending, get top-m indices per row
+    [~, sortIdx] = sort(symCounts, 2, 'descend');
+    topMIdx = sortIdx(:, 1:min(m, n-1));
+    
+    % Build candidatePairs via linear indexing
+    rowIdx = repmat((1:n)', 1, size(topMIdx, 2));
+    candidatePairs = false(n);
+    candidatePairs(sub2ind([n, n], rowIdx(:), topMIdx(:))) = true;
+
+    % Symmetrize and keep upper triangular
+    candidatePairs = candidatePairs | candidatePairs';
+    candidatePairs = triu(candidatePairs, 1);
+
+    % Get linear indices for candidate pairs
+    IuptriIdx = find(candidatePairs);
+    nPairs = length(IuptriIdx);
+
+    if nPairs == 0
+        return;
     end
 
-    % Match images
-    parfor i = 1:length(IuptriIdx)
+    % Compute transpose indices for inverse transforms
+    [rowIdx, colIdx] = ind2sub([n, n], IuptriIdx);
+    IlowtriIdx = sub2ind([n, n], colIdx, rowIdx);
+
+    % Initialize temp storage for parfor
+    allMatches_temp = cell(1, nPairs);
+    numMatches_temp = zeros(1, nPairs);
+    tforms_ij = cell(1, nPairs);
+    tforms_ji = cell(1, nPairs);
+    
+    % Print pairwise reduction
+    fprintf('Image matching | Top-m filtering: %d pairs instead of %d pairwise image matches (%.1f%% reduction)\n', ...
+    nPairs, n*(n-1)/2, 100*(1 - nPairs/(n*(n-1)/2)));
+
+    % Match candidate image pairs
+    parfor i = 1:nPairs
 
         % IND2SUB converts from a "linear" index into individual
         % subscripts
-        [ii, jj] = ind2sub(matSize, IuptriIdx(i));
+        [ii, jj] = ind2sub([n, n], IuptriIdx(i));
 
         % Keypoints matches
         matches = matchesAll{ii, jj};
@@ -110,53 +130,29 @@ function [allMatches, numMatches, tforms] = imageMatching(input, n, keypoints, m
         % Number of features
         nf = size(matches, 1);
 
-        % Image matching
-        % Filter matches using RANSAC (model maps keypt i to keypt j)
-        if nf >= nfmin
-            [inliers, model] = refineMatch(input, keypoints{ii}, keypoints{jj}, matches, ...
-                imagesProcessed{ii}, imagesProcessed{jj});
-
-            if input.useMATLABImageMatching == 1
-                model = model.A;
-            end
-
-            % Number of inliers
-            ni = length(inliers);
-
-            % Verify image matches using probabilistic model
-            if strcmp(input.transformationType, 'rigid') || ...
-                    strcmp(input.transformationType, 'similarity') || ...
-                    strcmp(input.transformationType, 'translation')
-
-                if ni > 5 + 0.025 * nf %2 % accept as correct image match
-                    allMatches_temp{i} = matches(inliers, :);
-                    numMatches_temp(i) = ni;
-                    tforms_ij{i} = model;
-                    tforms_ji{i} = inv(model);
-                end
-
-            elseif strcmp(input.transformationType, 'affine')
-
-                if ni > 5 + 0.15 * nf %3 % accept as correct image match
-                    allMatches_temp{i} = matches(inliers, :);
-                    numMatches_temp(i) = ni;
-                    tforms_ij{i} = model;
-                    tforms_ji{i} = inv(model);
-                end
-
-            else
-
-                if ni > 8 + 0.3 * nf
-                    allMatches_temp{i} = matches(inliers, :);
-                    numMatches_temp(i) = ni;
-                    tforms_ij{i} = model;
-                    tforms_ji{i} = inv(model);
-                end
-
-            end
-
+        if nf < 4
+            continue;
         end
 
+        % Image matching
+        % Filter matches using RANSAC (model maps keypt i to keypt j)
+
+        [inliers, model] = refineMatch(input, keypoints{ii}, keypoints{jj}, matches, ...
+            imagesProcessed{ii}, imagesProcessed{jj});
+
+        if input.useMATLABImageMatching == 1
+            model = model.A;
+        end
+
+        % Number of inliers
+        ni = length(inliers);
+        
+        if ni > 8 + 0.3 * nf
+            allMatches_temp{i} = matches(inliers, :);
+            numMatches_temp(i) = ni;
+            tforms_ij{i} = model;
+            tforms_ji{i} = inv(model);
+        end
     end
 
     % Populate all matches symmetric matrix

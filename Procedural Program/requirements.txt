@@ -20,69 +20,105 @@ Overall/global required MATLAB products/toolboxes:
 
 Toolbox usage summary:
   - Computer Vision Toolbox : used in 5 file(s)
-        • estimateTransformationMLESAC.m
-        • featureMatching.m
+        • featureMatchingPairwise.m
         • getFeaturePoints.m
+        • estimateTransformationMLESAC.m
         • imageMatching.m
         • renderPanorama.m
   - Image Processing Toolbox : used in 5 file(s)
-        • imageMatching.m
         • multiBandBlending.m
+        • imageMatching.m
         • panoramaCropper.m
-        • renderPanorama.m
         • resizeImagesToLimits.m
-  - MATLAB : used in 28 file(s)
+        • renderPanorama.m
+  - MATLAB : used in 30 file(s)
+        • inputs.m
+        • main.m
+        • linearBlending.m
+        • multiBandBlending.m
         • bundleAdjustmentH.m
         • bundleAdjustmentRKf.m
-        • cropNsavePanorama.m
-        • displayPanorama.m
+        • initializeCameraMatrices.m
+        • recognizePanoramas.m
+        • featureMatchingGlobal.m
+        • featureMatchingPairwise.m
+        • getFeaturePoints.m
+        • matchFeaturesScratch.m
+        • gainCompensationH.m
+        • gainCompensationRKf.m
         • estimateTransformationMLESAC.m
         • estimateTransformationRANSAC.m
-        • featureMatching.m
-        • gainCompensation.m
+        • imageMatching.m
+        • imageMatchingPanoramaConComps.m
+        • cropNsavePanorama.m
+        • imageWarp.m
+        • imref2dScratch.m
+        • outputLimitsScratch.m
+        • panoramaCropper.m
+        • resizeImagesToLimits.m
+        • transformPointsForwardScratch.m
+        • displayPanorama.m
+        • renderPanorama.m
+        • straightening.m
+        • loadImages.m
+        • reportGPUMemory.m
+  - Optimization Toolbox : used in 1 file(s)
+        • bundleAdjustmentH.m
+  - Parallel Computing Toolbox : used in 17 file(s)
+        • main.m
+        • linearBlending.m
+        • multiBandBlending.m
+        • bundleAdjustmentRKf.m
+        • initializeCameraMatrices.m
+        • featureMatchingPairwise.m
+        • matchFeaturesScratch.m
         • gainCompensationH.m
-        • getFeaturePoints.m
+        • gainCompensationRKf.m
         • imageMatching.m
         • imageMatchingPanoramaConComps.m
         • imageWarp.m
-        • imref2dScratch.m
-        • initializeCameraMatrices.m
-        • inputs.m
-        • linearBlending.m
-        • loadImages.m
-        • main.m
-        • matchFeaturesScratch.m
-        • multiBandBlending.m
-        • outputLimitsScratch.m
-        • panoramaCropper.m
-        • recognizePanoramas.m
-        • renderPanorama.m
         • resizeImagesToLimits.m
-        • straightening.m
-        • transformPointsForwardScratch.m
-  - Optimization Toolbox : used in 1 file(s)
-        • bundleAdjustmentH.m
-  - Parallel Computing Toolbox : used in 15 file(s)
-        • bundleAdjustmentRKf.m
-        • featureMatching.m
-        • gainCompensation.m
-        • gainCompensationH.m
-        • imageMatchingPanoramaConComps.m
-        • imageWarp.m
-        • initializeCameraMatrices.m
-        • linearBlending.m
-        • loadImages.m
-        • main.m
-        • matchFeaturesScratch.m
-        • multiBandBlending.m
         • renderPanorama.m
-        • resizeImagesToLimits.m
         • straightening.m
+        • loadImages.m
+        • reportGPUMemory.m
   - Statistics and Machine Learning Toolbox : used in 2 file(s)
         • initializeCameraMatrices.m
         • matchFeaturesScratch.m
 
 Per-file required MATLAB products/toolboxes:
+
+  inputs.m
+     1) MATLAB
+        Version       : 25.2
+        ProductNumber : 
+
+  main.m
+     1) MATLAB
+        Version       : 25.2
+        ProductNumber : 
+     2) Parallel Computing Toolbox
+        Version       : 25.2
+        ProductNumber : P
+
+  linearBlending.m
+     1) MATLAB
+        Version       : 25.2
+        ProductNumber : 
+     2) Parallel Computing Toolbox
+        Version       : 25.2
+        ProductNumber : P
+
+  multiBandBlending.m
+     1) MATLAB
+        Version       : 25.2
+        ProductNumber : 
+     2) Image Processing Toolbox
+        Version       : 25.2
+        ProductNumber : 
+     3) Parallel Computing Toolbox
+        Version       : 25.2
+        ProductNumber : P
 
   bundleAdjustmentH.m
      1) MATLAB
@@ -100,15 +136,72 @@ Per-file required MATLAB products/toolboxes:
         Version       : 25.2
         ProductNumber : P
 
-  cropNsavePanorama.m
+  initializeCameraMatrices.m
+     1) MATLAB
+        Version       : 25.2
+        ProductNumber : 
+     2) Statistics and Machine Learning Toolbox
+        Version       : 25.2
+        ProductNumber : 
+     3) Parallel Computing Toolbox
+        Version       : 25.2
+        ProductNumber : P
+
+  recognizePanoramas.m
      1) MATLAB
         Version       : 25.2
         ProductNumber : 
 
-  displayPanorama.m
+  featureMatchingGlobal.m
      1) MATLAB
         Version       : 25.2
         ProductNumber : 
+
+  featureMatchingPairwise.m
+     1) MATLAB
+        Version       : 25.2
+        ProductNumber : 
+     2) Parallel Computing Toolbox
+        Version       : 25.2
+        ProductNumber : P
+     3) Computer Vision Toolbox
+        Version       : 25.2
+        ProductNumber : `
+
+  getFeaturePoints.m
+     1) MATLAB
+        Version       : 25.2
+        ProductNumber : 
+     2) Computer Vision Toolbox
+        Version       : 25.2
+        ProductNumber : `
+
+  matchFeaturesScratch.m
+     1) MATLAB
+        Version       : 25.2
+        ProductNumber : 
+     2) Statistics and Machine Learning Toolbox
+        Version       : 25.2
+        ProductNumber : 
+     3) Parallel Computing Toolbox
+        Version       : 25.2
+        ProductNumber : P
+
+  gainCompensationH.m
+     1) MATLAB
+        Version       : 25.2
+        ProductNumber : 
+     2) Parallel Computing Toolbox
+        Version       : 25.2
+        ProductNumber : P
+
+  gainCompensationRKf.m
+     1) MATLAB
+        Version       : 25.2
+        ProductNumber : 
+     2) Parallel Computing Toolbox
+        Version       : 25.2
+        ProductNumber : P
 
   estimateTransformationMLESAC.m
      1) MATLAB
@@ -123,41 +216,6 @@ Per-file required MATLAB products/toolboxes:
         Version       : 25.2
         ProductNumber : 
 
-  featureMatching.m
-     1) MATLAB
-        Version       : 25.2
-        ProductNumber : 
-     2) Parallel Computing Toolbox
-        Version       : 25.2
-        ProductNumber : P
-     3) Computer Vision Toolbox
-        Version       : 25.2
-        ProductNumber : `
-
-  gainCompensation.m
-     1) MATLAB
-        Version       : 25.2
-        ProductNumber : 
-     2) Parallel Computing Toolbox
-        Version       : 25.2
-        ProductNumber : P
-
-  gainCompensationH.m
-     1) MATLAB
-        Version       : 25.2
-        ProductNumber : 
-     2) Parallel Computing Toolbox
-        Version       : 25.2
-        ProductNumber : P
-
-  getFeaturePoints.m
-     1) MATLAB
-        Version       : 25.2
-        ProductNumber : 
-     2) Computer Vision Toolbox
-        Version       : 25.2
-        ProductNumber : `
-
   imageMatching.m
      1) MATLAB
         Version       : 25.2
@@ -165,7 +223,10 @@ Per-file required MATLAB products/toolboxes:
      2) Image Processing Toolbox
         Version       : 25.2
         ProductNumber : 
-     3) Computer Vision Toolbox
+     3) Parallel Computing Toolbox
+        Version       : 25.2
+        ProductNumber : P
+     4) Computer Vision Toolbox
         Version       : 25.2
         ProductNumber : `
 
@@ -176,6 +237,11 @@ Per-file required MATLAB products/toolboxes:
      2) Parallel Computing Toolbox
         Version       : 25.2
         ProductNumber : P
+
+  cropNsavePanorama.m
+     1) MATLAB
+        Version       : 25.2
+        ProductNumber : 
 
   imageWarp.m
      1) MATLAB
@@ -190,68 +256,6 @@ Per-file required MATLAB products/toolboxes:
         Version       : 25.2
         ProductNumber : 
 
-  initializeCameraMatrices.m
-     1) MATLAB
-        Version       : 25.2
-        ProductNumber : 
-     2) Statistics and Machine Learning Toolbox
-        Version       : 25.2
-        ProductNumber : 
-     3) Parallel Computing Toolbox
-        Version       : 25.2
-        ProductNumber : P
-
-  inputs.m
-     1) MATLAB
-        Version       : 25.2
-        ProductNumber : 
-
-  linearBlending.m
-     1) MATLAB
-        Version       : 25.2
-        ProductNumber : 
-     2) Parallel Computing Toolbox
-        Version       : 25.2
-        ProductNumber : P
-
-  loadImages.m
-     1) MATLAB
-        Version       : 25.2
-        ProductNumber : 
-     2) Parallel Computing Toolbox
-        Version       : 25.2
-        ProductNumber : P
-
-  main.m
-     1) MATLAB
-        Version       : 25.2
-        ProductNumber : 
-     2) Parallel Computing Toolbox
-        Version       : 25.2
-        ProductNumber : P
-
-  matchFeaturesScratch.m
-     1) MATLAB
-        Version       : 25.2
-        ProductNumber : 
-     2) Statistics and Machine Learning Toolbox
-        Version       : 25.2
-        ProductNumber : 
-     3) Parallel Computing Toolbox
-        Version       : 25.2
-        ProductNumber : P
-
-  multiBandBlending.m
-     1) MATLAB
-        Version       : 25.2
-        ProductNumber : 
-     2) Image Processing Toolbox
-        Version       : 25.2
-        ProductNumber : 
-     3) Parallel Computing Toolbox
-        Version       : 25.2
-        ProductNumber : P
-
   outputLimitsScratch.m
      1) MATLAB
         Version       : 25.2
@@ -265,7 +269,23 @@ Per-file required MATLAB products/toolboxes:
         Version       : 25.2
         ProductNumber : 
 
-  recognizePanoramas.m
+  resizeImagesToLimits.m
+     1) MATLAB
+        Version       : 25.2
+        ProductNumber : 
+     2) Image Processing Toolbox
+        Version       : 25.2
+        ProductNumber : 
+     3) Parallel Computing Toolbox
+        Version       : 25.2
+        ProductNumber : P
+
+  transformPointsForwardScratch.m
+     1) MATLAB
+        Version       : 25.2
+        ProductNumber : 
+
+  displayPanorama.m
      1) MATLAB
         Version       : 25.2
         ProductNumber : 
@@ -284,17 +304,6 @@ Per-file required MATLAB products/toolboxes:
         Version       : 25.2
         ProductNumber : `
 
-  resizeImagesToLimits.m
-     1) MATLAB
-        Version       : 25.2
-        ProductNumber : 
-     2) Image Processing Toolbox
-        Version       : 25.2
-        ProductNumber : 
-     3) Parallel Computing Toolbox
-        Version       : 25.2
-        ProductNumber : P
-
   straightening.m
      1) MATLAB
         Version       : 25.2
@@ -303,37 +312,50 @@ Per-file required MATLAB products/toolboxes:
         Version       : 25.2
         ProductNumber : P
 
-  transformPointsForwardScratch.m
+  loadImages.m
      1) MATLAB
         Version       : 25.2
         ProductNumber : 
+     2) Parallel Computing Toolbox
+        Version       : 25.2
+        ProductNumber : P
+
+  reportGPUMemory.m
+     1) MATLAB
+        Version       : 25.2
+        ProductNumber : 
+     2) Parallel Computing Toolbox
+        Version       : 25.2
+        ProductNumber : P
 
 Files analyzed:
+  - inputs.m
+  - main.m
+  - linearBlending.m
+  - multiBandBlending.m
   - bundleAdjustmentH.m
   - bundleAdjustmentRKf.m
-  - cropNsavePanorama.m
-  - displayPanorama.m
+  - initializeCameraMatrices.m
+  - recognizePanoramas.m
+  - featureMatchingGlobal.m
+  - featureMatchingPairwise.m
+  - getFeaturePoints.m
+  - matchFeaturesScratch.m
+  - gainCompensationH.m
+  - gainCompensationRKf.m
   - estimateTransformationMLESAC.m
   - estimateTransformationRANSAC.m
-  - featureMatching.m
-  - gainCompensation.m
-  - gainCompensationH.m
-  - getFeaturePoints.m
   - imageMatching.m
   - imageMatchingPanoramaConComps.m
+  - cropNsavePanorama.m
   - imageWarp.m
   - imref2dScratch.m
-  - initializeCameraMatrices.m
-  - inputs.m
-  - linearBlending.m
-  - loadImages.m
-  - main.m
-  - matchFeaturesScratch.m
-  - multiBandBlending.m
   - outputLimitsScratch.m
   - panoramaCropper.m
-  - recognizePanoramas.m
-  - renderPanorama.m
   - resizeImagesToLimits.m
-  - straightening.m
   - transformPointsForwardScratch.m
+  - displayPanorama.m
+  - renderPanorama.m
+  - straightening.m
+  - loadImages.m
+  - reportGPUMemory.m

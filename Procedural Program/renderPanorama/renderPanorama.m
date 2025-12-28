@@ -26,7 +26,7 @@ function [panorama, rgbAnnotation] = renderPanorama(input, images, imgSize, came
     %   - 'stereographic' produces a fisheye-like projection centered on the reference view.
     %   - Use tiling and GPU options for large panoramas to control memory usage.
     %
-    %   See also gainCompensation, multiBandBlending, gpuArray, gather
+    %   See also gainCompensationRKf, gainCompensationH, multiBandBlending, gpuArray, gather
 
     arguments
         input (1, 1) struct
@@ -305,19 +305,19 @@ function [panorama, rgbAnnotation] = renderPanorama(input, images, imgSize, came
         switch lower(mode)
             case {'planar', 'perspective', 'stereographic'}
                 tic;
-                gains = gainCompensation(images, cameras, mode, refIdx, opts, ...
+                gains = gainCompensationRKf(images, cameras, mode, refIdx, opts, ...
                     H, W, u0, v0, [], [], [], srcW);
                 fprintf('Gain compensation planar/stereographic panorama rendering time : %f seconds\n', toc);
 
             case 'cylindrical'
                 tic;
-                gains = gainCompensation(images, cameras, mode, refIdx, opts, ...
+                gains = gainCompensationRKf(images, cameras, mode, refIdx, opts, ...
                     H, W, [], [], th0, h0, [], srcW);
                 fprintf('Gain compensation cylindrical panorama rendering time : %f seconds\n', toc);
 
             case {'spherical', 'equirectangular'}
                 tic;
-                gains = gainCompensation(images, cameras, mode, refIdx, opts, ...
+                gains = gainCompensationRKf(images, cameras, mode, refIdx, opts, ...
                     H, W, [], [], th0, [], ph0, srcW);
                 fprintf('Gain compensation spherical/equirectangular panorama rendering time : %f seconds\n', toc);
 

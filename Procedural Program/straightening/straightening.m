@@ -98,7 +98,8 @@ function straightenedTforms = straightening(input, ccbundlerTforms)
         avgY = avgY / norm(avgY);
 
         if dot(up, avgY) < 0
-            % "up" is pointing in same direction as downward camera Y-axes, so flip it
+            % "up" is anti-aligned with camera Y (which points down)
+            % This means "up" is pointing down in the world, so flip it
             up = -up;
         end
 

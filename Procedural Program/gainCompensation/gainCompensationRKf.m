@@ -1,7 +1,7 @@
-function gains = gainCompensation(images, cameras, mode, refIdx, opts, ...
+function gains = gainCompensationRKf(images, cameras, mode, refIdx, opts, ...
         H, W, u0, v0, th0, h0, ph0, srcW)
-    % GAINCOMPENSATION Estimate per-image RGB gains using Brown–Lowe (2007) Eq. (29).
-    %   gains = gainCompensation(images, cameras, mode, refIdx, opts, ...
+    % GAINCOMPENSATIONRKF Estimate per-image RGB gains using Brown–Lowe (2007) Eq. (29).
+    %   gains = gainCompensationRKf(images, cameras, mode, refIdx, opts, ...
     %           H, W, u0, v0, th0, h0, ph0, srcW) computes brightness gain factors
     %   for each image so that overlapping regions have consistent exposure. The
     %   method tiles a subsampled panorama grid, accumulates per-overlap statistics,
@@ -54,27 +54,27 @@ function gains = gainCompensation(images, cameras, mode, refIdx, opts, ...
     N = numel(images);
 
     if ~(isvector(images) && isvector(srcW) && numel(srcW) == N)
-        error('gainCompensation:SrcWSize', 'srcW must be a vector cell array with the same length as images.');
+        error('gainCompensationRKf:SrcWSize', 'srcW must be a vector cell array with the same length as images.');
     end
 
     if ~(isstruct(cameras) && numel(cameras) == N)
-        error('gainCompensation:CamerasSize', 'cameras must be a struct array with one entry per image.');
+        error('gainCompensationRKf:CamerasSize', 'cameras must be a struct array with one entry per image.');
     end
 
     for i = 1:N
 
         if ~isfield(cameras(i), 'R') || ~isfield(cameras(i), 'K')
-            error('gainCompensation:CamFields', 'cameras(%d) must contain fields R and K.', i);
+            error('gainCompensationRKf:CamFields', 'cameras(%d) must contain fields R and K.', i);
         end
 
         Ri = cameras(i).R; Ki = cameras(i).K;
 
         if ~(isnumeric(Ri) && isequal(size(Ri), [3, 3]) && all(isfinite(Ri(:))))
-            error('gainCompensation:RShape', 'cameras(%d).R must be a 3x3 finite numeric matrix.', i);
+            error('gainCompensationRKf:RShape', 'cameras(%d).R must be a 3x3 finite numeric matrix.', i);
         end
 
         if ~(isnumeric(Ki) && isequal(size(Ki), [3, 3]) && all(isfinite(Ki(:))))
-            error('gainCompensation:KShape', 'cameras(%d).K must be a 3x3 finite numeric matrix.', i);
+            error('gainCompensationRKf:KShape', 'cameras(%d).K must be a 3x3 finite numeric matrix.', i);
         end
 
     end

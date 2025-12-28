@@ -29,6 +29,9 @@ warning('on', 'all');
 %--------------------------------------------------------------------------
 inputs;
 
+% Add folders
+addpath(genpath(pwd));
+
 %% Parallel workers start
 %--------------------------------------------------------------------------
 % Parallel pools
@@ -77,7 +80,7 @@ end
 %--------------------------------------------------------------------------
 % Stitches panoramas
 %--------------------------------------------------------------------------
-for myImg =  1:foldersLen
+for myImg = 1:foldersLen
     stitchStart = tic;
     fprintf('Image number: %i | Current folder: %s\n', myImg, imgFolders(myImg).name);
 
@@ -89,7 +92,11 @@ for myImg =  1:foldersLen
 
     %% Get feature matrices and keypoints
     featureMatchtic = tic;
-    featureMatches = featureMatching(input, allDescriptors, numImg);
+    if input.matchFeaturesPairwise == true
+        featureMatches = featureMatchingPairwise(input, allDescriptors, numImg);
+    else
+        featureMatches = featureMatchingGlobal(input, allDescriptors, numImg);
+    end
     fprintf('Matched features: %f seconds\n', toc(featureMatchtic));
 
     %% Find matches

@@ -120,7 +120,7 @@ function [bundlerTformsAll, finalrefIdxsAll, panoIndices, concomps, panaromaCCs,
     panaromaCCs = find(ccBinSizes > 1);
     connCompsNumber = numel(panaromaCCsAll);
 
-    fprintf('Found %i panorama images set(s).\n', numel(panaromaCCs));
+    fprintf('Found %i panorama images set(s).\n', connCompsNumber);
 
     % Show graphs
     if input.showAdjacencyGraph

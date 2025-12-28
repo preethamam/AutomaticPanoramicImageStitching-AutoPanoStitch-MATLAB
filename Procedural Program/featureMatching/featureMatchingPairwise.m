@@ -1,8 +1,8 @@
-function matches = featureMatching(input, allDescriptors, numImg)
-    %FEATUREMATCHING Pairwise feature matching across images using upper-triangular schedule.
+function matches = featureMatchingPairwise(input, allDescriptors, numImg)
+    %FEATUREMATCHINGPAIRWISE Pairwise feature matching across images using upper-triangular schedule.
     %
     % Syntax
-    %   matches = featureMatching(input, allDescriptors, numImg)
+    %   matches = featureMatchingPairwise(input, allDescriptors, numImg)
     %
     % Description
     %   Builds a numImg-by-numImg cell array of pairwise feature matches. The
@@ -96,8 +96,8 @@ function matches = getMatches(input, features1, features2)
 
     arguments
         input struct
-        features1 {mustBeNumeric}
-        features2 {mustBeNumeric}
+        features1  
+        features2
     end
 
     if input.useMATLABFeatureMatch == 1
