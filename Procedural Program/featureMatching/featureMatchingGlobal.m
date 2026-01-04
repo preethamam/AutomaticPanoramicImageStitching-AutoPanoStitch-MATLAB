@@ -100,6 +100,8 @@ function matches = featureMatchingGlobal(input, allDescriptors, numImg)
     % We need at least two *cross-image* neighbors after pruning,
     % so k should be >= 2 (self + next-best)
     Kq = k;
+    % Kq = max(k, 2 * numImg);
+    % Kq = max(k, numImg + 3);
 
     % ---- Global kNN search (descriptor → descriptor) ------------------------
     % nnIdxAll, nnDistAll are [totalF x Kq]
@@ -119,47 +121,60 @@ function matches = featureMatchingGlobal(input, allDescriptors, numImg)
 
     end
 
-    % ---- Per-feature filtering + ratio test --------------------------------
+    % ---- Per-feature filtering + ratio test --------------------------------  
     for q = 1:totalF
-        qi = imgIdx(q); % query image ID
-
-        neighIdx = nnIdxAll(q, :); % neighbor indices
-        neighDist = nnDistAll(q, :); % neighbor distances
-
-        % Remove self-match
-        mask = neighIdx ~= uint32(q);
-        neighIdx = neighIdx(mask);
-        neighDist = neighDist(mask);
-
-        % Remove same-image neighbors (cross-image only)
-        mask = imgIdx(double(neighIdx)) ~= qi;
-        neighIdx = neighIdx(mask);
-        neighDist = neighDist(mask);
-
-        % Need at least two candidates for ratio test
+        qi = imgIdx(q);
+    
+        neighIdx  = nnIdxAll(q,:);
+        neighDist = nnDistAll(q,:);
+    
+        % --- Remove self matches ---
+        valid = neighIdx ~= uint32(q);
+        neighIdx  = neighIdx(valid);
+        neighDist = neighDist(valid);
+    
+        % --- Remove same-image neighbors ---
+        neighImgs = imgIdx(double(neighIdx));
+        valid = neighImgs ~= qi;
+        neighIdx   = neighIdx(valid);
+        neighDist  = neighDist(valid);
+        neighImgs  = neighImgs(valid);
+    
         if numel(neighDist) < 2
             continue;
         end
-
-        % Lowe ratio test (best vs second-best)
-        if neighDist(1) / max(neighDist(2), eps('single')) > ratioThr
+    
+        % --- Ratio test (vectorized) ---
+        ratios = neighDist(1:end-1) ./ max(neighDist(2:end), eps('single'));
+        pass   = ratios <= ratioThr;
+    
+        if ~any(pass)
             continue;
         end
-
-        % Accepted match → resolve image + local feature indices
-        j = imgIdx(double(neighIdx(1))); % matched image
-        li = localIdx(q); % local index (qi)
-        lj = localIdx(double(neighIdx(1))); % local index (j)
-
-        % Store symmetrically (upper triangular)
-        if qi < j
-            matches{qi, j}(end + 1, :) = double([li lj]); %#ok<AGROW>
-        else
-            matches{j, qi}(end + 1, :) = double([lj li]); %#ok<AGROW>
+    
+        neighIdx  = neighIdx(1:end-1);
+        neighImgs = neighImgs(1:end-1);
+        neighIdx  = neighIdx(pass);
+        neighImgs = neighImgs(pass);
+    
+        % --- Keep only first match per target image (stable) ---
+        [~, ia] = unique(neighImgs, 'stable');
+        neighIdx  = neighIdx(ia);
+        neighImgs = neighImgs(ia);
+    
+        li = localIdx(q);
+        lj = localIdx(double(neighIdx));
+    
+        % --- Store matches ---
+        for k = 1:numel(neighImgs)
+            j = neighImgs(k);
+            if qi < j
+                matches{qi,j}(end+1,:) = [li lj(k)];
+            else
+                matches{j,qi}(end+1,:) = [lj(k) li];
+            end
         end
-
     end
-
 end
 
 function out = ifelse(cond, valTrue, valFalse)

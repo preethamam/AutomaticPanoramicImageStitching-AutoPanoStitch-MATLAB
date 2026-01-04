@@ -436,7 +436,7 @@ function [panorama, rgbAnnotation] = renderPanorama(input, images, imgSize, came
 
     % --- Draw debugging annotations -----------------------------------------
     if opts.showPanoramaImgsNums && opts.showCropBoundingBox
-
+        ws = warning('off','all');
         switch lower(mode)
             case {'planar', 'perspective', 'stereographic'}
                 [xBoxes, yBoxes, centers] = allWarpedBoxes( ...
@@ -454,6 +454,27 @@ function [panorama, rgbAnnotation] = renderPanorama(input, images, imgSize, came
         yBoxes = cellfun(@(y) y - dy, yBoxes, 'uni', 0);
         centers = centers - [dx dy];
 
+        % Panorama size AFTER crop
+        Hc = size(panorama,1);
+        Wc = size(panorama,2);
+
+        % --- compute valid (non-black) support polygon once ---
+        validMask = any(panorama ~= 0, 3);           % non-black pixels
+        validMask = imfill(validMask, 'holes');      % optional, stabilizes boundary
+        
+        B = bwboundaries(validMask);
+        if isempty(B)
+            supportPoly = [];
+        else
+            % pick largest boundary
+            lens = cellfun(@(b) size(b,1), B);
+            [~,id] = max(lens);
+            b = B{id};                                % [row col]
+            supportXY = [b(:,2) b(:,1)];              % -> [x y]
+        
+            supportPoly = polyshape(supportXY(:,1), supportXY(:,2), 'Simplify', true);
+        end
+
         % Validate, pack, and draw
         isValid = cellfun(@(x, y) numel(x) == numel(y) && numel(x) >= 3 && ...
             all(isfinite(x)) && all(isfinite(y)), ...
@@ -463,17 +484,98 @@ function [panorama, rgbAnnotation] = renderPanorama(input, images, imgSize, came
         yBoxesV = yBoxes(isValid);
         centersV = centers(isValid, :);
 
-        polyCells = cellfun(@(x, y) reshape([x(:) y(:)]', 1, []), ...
-            xBoxesV, yBoxesV, 'uni', 0);
+        polyCells = {};
+        polyOwner = [];  % which image idx each poly belongs to (for color)
+        
+        for i = 1:numel(xBoxesV)
+            x = xBoxesV{i};
+            y = yBoxesV{i};
+        
+            if any(~isfinite(x)) || any(~isfinite(y)) || numel(x) < 3
+                continue;
+            end
+        
+            if ismember(lower(mode), {'spherical','equirectangular','cylindrical'})
+                polys = splitPolyAtSeam(x, y, Wc);   % <-- defined below
+            else
+                polys = { [x(:) y(:)] };
+            end
+        
+            for k = 1:numel(polys)
+                P = polys{k};
+                if size(P,1) < 3, continue; end
+            
+                if ~isempty(supportPoly)
+                    boxPoly = polyshape(P(:,1), P(:,2), 'Simplify', true);
+                    I = intersect(boxPoly, supportPoly);
+            
+                    if I.NumRegions < 1
+                        continue;
+                    end
+            
+                    % keep each region as its own polygon
+                    regs = regions(I);
+                    for r = 1:numel(regs)
+                        [xx,yy] = boundary(regs(r));
+                        if numel(xx) >= 3
+                            Pr = [xx(:) yy(:)];
+                            polyCells{end+1} = reshape(Pr.', 1, []); %#ok<AGROW>
+                            polyOwner(end+1) = i;                    %#ok<AGROW>
+                        end
+                    end
+                else
+                    polyCells{end+1} = reshape(P.', 1, []);
+                    polyOwner(end+1) = i;
+                end
+            end
+        end
 
-        % Generate N random colors (each row is [R G B])
+        % Colors: repeat the original image color for split polys
         colorMat = brightColors(numImages);
-
+        colorMatV = colorMat(isValid, :);
+        colorMatDraw = colorMatV(polyOwner, :);        
+        
         rgbAnnotation = insertShape(panorama, 'Polygon', polyCells, ...
-            'Color', colorMat, 'LineWidth', 2);
-        labels = arrayfun(@num2str, 1:numel(xBoxesV), 'uni', 0);
-        rgbAnnotation = insertText(rgbAnnotation, centersV, labels, ...
-            'FontSize', 24, 'BoxColor', 'red', 'TextColor', 'white');
+        'Color', colorMatDraw, 'LineWidth', 2);
+        
+        % Image numbers as labels
+        labels = arrayfun(@num2str, 1:numel(xBoxesV), 'uni', 0);                
+        fontSize = 24;
+        labelPos = zeros(numel(xBoxesV),2);
+
+        for i = 1:numel(xBoxesV)
+            % All polygon pieces belonging to image i
+            idx = find(polyOwner == i);
+        
+            % Fallback (should rarely happen)
+            if isempty(idx)
+                labelPos(i,:) = centersV(i,:);
+                continue;
+            end
+        
+            % Pick the largest visible polygon piece
+            areas = zeros(numel(idx),1);
+            for k = 1:numel(idx)
+                P = reshape(polyCells{idx(k)}, 2, []).';
+                areas(k) = polygonArea(P);
+            end
+        
+            [~,m] = max(areas);
+            P = reshape(polyCells{idx(m)}, 2, []).';
+        
+            % True area centroid
+            c = polygonCentroid(P);
+            if any(~isfinite(c))
+                c = mean(P,1);
+            end
+            labelPos(i,:) = c;        
+        end
+        
+        % Draw the image numbers
+        rgbAnnotation = insertText(rgbAnnotation, labelPos, labels, ...
+            'FontSize', fontSize, 'BoxColor', 'red', 'TextColor', 'white');
+
+         warning('on','all');
     end
 
     % ========== GPU MEMORY CLEANUP (add before final 'end') ==========
@@ -484,8 +586,213 @@ function [panorama, rgbAnnotation] = renderPanorama(input, images, imgSize, came
         % Wait for all GPU operations to complete
         wait(gpuDevice);
     end
+end
+
+
+function A = polygonArea(P)
+% POLYGONAREA  Signed area of a simple polygon (shoelace formula)
+%
+%   A = polygonArea(P)
+%
+% Inputs:
+%   P : Nx2 array of polygon vertices [x y]
+%       - polygon does NOT need to be closed
+%       - vertices should be ordered (CW or CCW)
+%
+% Outputs:
+%   A : positive scalar area
+
+    x = P(:,1);
+    y = P(:,2);
+
+    % Close polygon implicitly
+    x2 = x([2:end 1]);
+    y2 = y([2:end 1]);
+
+    A = 0.5 * abs(sum(x .* y2 - x2 .* y));
 
 end
+
+
+function c = polygonCentroid(P)
+% P: Nx2 polygon vertices (not necessarily closed)
+% c: 1x2 area centroid
+
+    x = P(:,1);
+    y = P(:,2);
+
+    % Close polygon
+    x2 = x([2:end 1]);
+    y2 = y([2:end 1]);
+
+    cross = x .* y2 - x2 .* y;
+
+    A = sum(cross) / 2;
+
+    if abs(A) < eps
+        % Degenerate polygon fallback
+        c = mean(P,1);
+        return;
+    end
+
+    cx = sum((x + x2) .* cross) / (6*A);
+    cy = sum((y + y2) .* cross) / (6*A);
+
+    c = [cx cy];
+end
+
+
+function polys = splitPolyAtSeam(x, y, W)
+% Split polygon at the panorama seam by unwrapping X, then clipping to [1,W].
+% This avoids vertex reordering artifacts (diagonal closures / entanglement).
+
+    x = x(:); y = y(:);
+
+    % Wrap into [1..W] for stable unwrapping
+    xw = mod(x-1, W) + 1;
+
+    % Close polygon if needed
+    if xw(1) ~= xw(end) || y(1) ~= y(end)
+        xw = [xw; xw(1)];
+        y  = [y;  y(1)];
+    end
+
+    % ---- 1) Unwrap x to be continuous (remove seam jumps) ----
+    xu = xw;
+    for i = 2:numel(xu)
+        dx = xu(i) - xu(i-1);
+        if dx >  W/2
+            xu(i:end) = xu(i:end) - W;
+        elseif dx < -W/2
+            xu(i:end) = xu(i:end) + W;
+        end
+    end
+
+    P0 = [xu(1:end-1) y(1:end-1)];
+    % quick reject: if fully inside, no split needed
+    if all(P0(:,1) >= 1 & P0(:,1) <= W)
+        polys = { [xw(1:end-1) y(1:end-1)] };
+        return;
+    end
+
+    % ---- 2) Clip to [1,W] for the main piece ----
+    Pmain = clipPolyXRange(P0, 1, W);
+
+    % ---- 3) Clip a shifted copy (captures the wrapped-around piece) ----
+    Pshift = P0;
+    Pshift(:,1) = Pshift(:,1) - W;
+    Pwrap = clipPolyXRange(Pshift, 1, W);
+
+    % ---- 4) Wrap x back to [1,W] and output ----
+    polys = {};
+    if size(Pmain,1) >= 3
+        Pmain(:,1) = mod(Pmain(:,1)-1, W) + 1;
+        Pmain = uniqueStableRows(Pmain);
+         Pmain = rotatePolyAwayFromSeam(Pmain, W);   % <<< ADD
+        polys{end+1} = Pmain;
+    end
+    if size(Pwrap,1) >= 3
+        Pwrap(:,1) = mod(Pwrap(:,1)-1, W) + 1;
+        Pwrap = uniqueStableRows(Pwrap);
+        Pwrap = rotatePolyAwayFromSeam(Pwrap, W);   % <<< ADD
+        polys{end+1} = Pwrap;
+    end
+
+    if isempty(polys)
+        polys = { [xw(1:end-1) y(1:end-1)] }; % robust fallback
+    end
+end
+
+function P = clipPolyXRange(P, xmin, xmax)
+% Sutherland–Hodgman polygon clipping against vertical slab xmin<=x<=xmax.
+% Keeps vertex order -> prevents artificial jump edges.
+
+    if isempty(P), return; end
+
+    % clip against x >= xmin
+    P = clipOne(P, @(p) p(1) >= xmin, @(a,b) intersectX(a,b,xmin));
+    if isempty(P), return; end
+
+    % clip against x <= xmax
+    P = clipOne(P, @(p) p(1) <= xmax, @(a,b) intersectX(a,b,xmax));
+end
+
+function Q = clipOne(P, insideFn, intersectFn)
+    Q = zeros(0,2);
+    n = size(P,1);
+    if n == 0, return; end
+
+    S = P(end,:);
+    S_in = insideFn(S);
+
+    for i = 1:n
+        E = P(i,:);
+        E_in = insideFn(E);
+
+        if E_in
+            if ~S_in
+                Q(end+1,:) = intersectFn(S,E); %#ok<AGROW>
+            end
+            Q(end+1,:) = E; %#ok<AGROW>
+        elseif S_in
+            Q(end+1,:) = intersectFn(S,E); %#ok<AGROW>
+        end
+
+        S = E;
+        S_in = E_in;
+    end
+end
+
+function I = intersectX(A, B, xk)
+% Intersection of segment A->B with vertical line x=xk.
+    x1 = A(1); y1 = A(2);
+    x2 = B(1); y2 = B(2);
+
+    if x2 == x1
+        t = 0; % degenerate; shouldn't happen often
+    else
+        t = (xk - x1) / (x2 - x1);
+    end
+    t = max(0, min(1, t));
+    I = [xk, y1 + t*(y2 - y1)];
+end
+
+function P = uniqueStableRows(P)
+% stable "unique" for consecutive near-duplicates (keeps order)
+% (Version-2 needs tolerance because clipping creates eps-jitter points)
+
+    if isempty(P), return; end
+    tol = 1e-6;
+
+    d = sqrt(sum(diff(P,1,1).^2, 2));
+    keep = [true; d > tol];
+    P = P(keep,:);
+
+    % also remove a duplicate closing point if it equals the first (within tol)
+    if size(P,1) >= 2 && norm(P(end,:) - P(1,:)) <= tol
+        P(end,:) = [];
+    end
+end
+
+function P = rotatePolyAwayFromSeam(P, W)
+% Rotate vertex order so the largest |dx| edge is not the closing edge.
+% Prevents tiny "spike" closure artifacts after clipping/wrapping.
+
+    if size(P,1) < 3, return; end
+
+    x = P(:,1);
+    x2 = x([2:end 1]);
+    dx = x2 - x;                % raw dx in wrapped coords
+
+    [mx, k] = max(abs(dx));     % largest jump edge index
+
+    % Only rotate if there is a meaningful jump (seam/cut artifact)
+    if mx > W/4
+        % start at the vertex AFTER the jump edge
+        P = P([k+1:end 1:k], :);
+    end
+end
+
 
 function colorMat = brightColors(N)
     % BRIGHTCOLORS  Generate N vivid, bright RGB colors (uint8).
@@ -1225,8 +1532,26 @@ function [xPoly, yPoly, centroid] = warpedBBoxes(imageSize, cam, mode, ...
     end
 
     Hc = imageSize(1); Wc = imageSize(2);
-    corners = [1, 1; 1, Wc; Hc, Wc; Hc, 1]; % [row, col]
-    xy1 = [corners(:, 2)'; corners(:, 1)'; ones(1, 4)]; % [u;v;1] (col = x, row = y)
+    
+    % --- sample image BORDER instead of just 4 corners ---
+    nEdge = max(256, ceil(max(imageSize(1:2)) / 4));
+    
+    epsPix = max(1, ceil(0.5 * max(Hc,Wc) / nEdge));  % scale w/ resolution (no magic 1)
+
+    top_u    = linspace(1+epsPix, Wc-epsPix, nEdge);
+    top_v    = (1+epsPix) * ones(1, nEdge);
+    
+    right_u  = (Wc-epsPix) * ones(1, nEdge);
+    right_v  = linspace(1+epsPix, Hc-epsPix, nEdge);
+    
+    bottom_u = linspace(Wc-epsPix, 1+epsPix, nEdge);
+    bottom_v = (Hc-epsPix) * ones(1, nEdge);
+    
+    u = [top_u, right_u, bottom_u];
+    v = [top_v, right_v, bottom_v];
+
+    
+    xy1 = [u; v; ones(1, numel(u))];
 
     rayC = cam.K \ xy1;
     rayW = cam.R' * rayC; % to world

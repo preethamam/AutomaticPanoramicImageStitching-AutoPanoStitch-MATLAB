@@ -18,7 +18,7 @@ end
 
 % Folder name that consists of the images set
 folderName = '';
-input.imageSaveFolder = '..\..\..\..\..\..\Team Work\Team CrackSTITCH\Results\AutoPanoStitch\Spherical 09 - MyTforms Maxmatches 300 MaxIter 100';
+input.imageSaveFolder = '..\..\..\..\..\..\Team Work\Team CrackSTITCH\Results\AutoPanoStitch\Spherical 1 - MyTforms Maxmatches 300 MaxIter 100 Fglobal';
 
 %% Inputs 2
 %--------------------------------------------------------------------------
@@ -41,10 +41,10 @@ input.EdgeThreshold = 6;                                % Edge threshold, specif
                                                         % The threshold is used to filter out unstable edge-like features  -- SIFT only
 
 % Features matching
-input.k = 4;                                            % Brown-Lowe uses k=4
+input.k = 10;                                            % Brown-Lowe uses k=4
 input.BFMatch = 0;                                      % Brute-force matcher for the binary features in global feature matching
 input.matchFeaturesPairwise = 0;                        % Match features by pairwise images or globally
-input.useMATLABFeatureMatch = 1;                        % Use MATLAB default matchFeatures function: 0-off | 1-on (very fast)
+input.useMATLABFeatureMatch = 1;                        % Use MATLAB default pairwise matchFeatures function: 0-off | 1-on (very fast)
 input.Matchingmethod = 'Approximate';                   % 'Exhaustive' (default) | 'Approximate'
 input.ApproxFloatNNMethod = 'subsetpdist2';             % Nearset neighbor finding methods: 'pca2nn' 'subsetpdist2'; 'kdtree'
                                                         % Speed: fast | slow | super slow
@@ -66,7 +66,7 @@ input.mBrownLowe = 6;                                   % Potential image matche
 
 % RANSAC execution time for projective case is ~1.35 times higher than MLESAC.
 input.maxIter = 500;                                    % RANSAC/MLESAC maximum iterations
-input.maxDistance = 5.5;                                % Maximum distance (pixels) increase this to get more matches. Default: 1.5
+input.maxDistance = 3.5;                                % Maximum distance (pixels) increase this to get more matches. Default: 1.5
                                                         % For large image RANSAC/MLESAC requires maxDistance 1-3+ pixels
                                                         % more than the default value of 3.5 pixels.
 input.inliersConfidence = 99.9;                         % Inlier confidence [0, 100]
@@ -74,7 +74,7 @@ input.transformationType = 'projective';                % Motion model: 'project
 input.showAdjacencyGraph = false;                       % Display image matching graph
 
 % Bundle adjustment (BA)
-input.maxIterLM = 40;                                   % Maximum Levenberg-Marquardt iterations     
+input.maxIterLM = 100;                                   % Maximum Levenberg-Marquardt iterations     
 input.lambda = 1e-3;                                    % Initial damping factor for LM
 input.sigmaHuber = 2.0;                                 % Huber loss function standard deviation
 input.verboseLM = false;                                % true - display LM iterations | false - silent
@@ -117,9 +117,9 @@ input.canvasColor = 'black';                            % Panorama canvas color 
 input.blackRange = 0;                                   % Minimum dark pixel value to crop panaroma
 input.whiteRange = 250;                                 % Minimum bright pixel value to crop panaroma
 input.showKeypointsPlot = 0;                            % Display keypoints plot (parfor suppresses this flag, so no use)
-input.displayPanoramas = true;                          % Display panoramas in figure
-input.showPanoramaImgsNums = false;                     % Display the panorama images with numbers after tranform 0 or 1
-input.showCropBoundingBox = false;                      % Display cropping bounding box 0 | 1
+input.displayPanoramas = false;                          % Display panoramas in figure
+input.showPanoramaImgsNums = true;                     % Display the panorama images with numbers after tranform 0 or 1
+input.showCropBoundingBox = true;                      % Display cropping bounding box 0 | 1
 input.cropPanorama = false;                             % Crop panorama image 0 | 1
-input.imageWrite = false;                               % Write panorama image to disk 0 | 1
+input.imageWrite = true;                               % Write panorama image to disk 0 | 1
 input.writeCommandWindowOutput = true;                  % Write command window output to a file 0 | 1
