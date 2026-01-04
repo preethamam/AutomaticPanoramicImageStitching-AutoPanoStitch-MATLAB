@@ -41,7 +41,7 @@ input.EdgeThreshold = 6;                                % Edge threshold, specif
                                                         % The threshold is used to filter out unstable edge-like features  -- SIFT only
 
 % Features matching
-input.k = 10;                                            % Brown-Lowe uses k=4
+input.k = 10;                                           % Brown-Lowe uses k=4
 input.BFMatch = 0;                                      % Brute-force matcher for the binary features in global feature matching
 input.matchFeaturesPairwise = 0;                        % Match features by pairwise images or globally
 input.useMATLABFeatureMatch = 1;                        % Use MATLAB default pairwise matchFeatures function: 0-off | 1-on (very fast)
@@ -117,9 +117,9 @@ input.canvasColor = 'black';                            % Panorama canvas color 
 input.blackRange = 0;                                   % Minimum dark pixel value to crop panaroma
 input.whiteRange = 250;                                 % Minimum bright pixel value to crop panaroma
 input.showKeypointsPlot = 0;                            % Display keypoints plot (parfor suppresses this flag, so no use)
-input.displayPanoramas = false;                          % Display panoramas in figure
-input.showPanoramaImgsNums = true;                     % Display the panorama images with numbers after tranform 0 or 1
-input.showCropBoundingBox = true;                      % Display cropping bounding box 0 | 1
+input.displayPanoramas = true;                          % Display panoramas in figure
+input.showPanoramaImgsNums = false;                     % Display the panorama images with numbers after tranform 0 or 1
+input.showCropBoundingBox = false;                      % Display cropping bounding box 0 | 1
 input.cropPanorama = false;                             % Crop panorama image 0 | 1
-input.imageWrite = true;                               % Write panorama image to disk 0 | 1
+input.imageWrite = false;                               % Write panorama image to disk 0 | 1
 input.writeCommandWindowOutput = true;                  % Write command window output to a file 0 | 1

@@ -55,7 +55,7 @@ end
 
 % Folder name that consists of the images set
 folderName = '';
-input.imageSaveFolder = '..\..\..\..\..\..\Team Work\Team CrackSTITCH\Results\AutoPanoStitch\Spherical 09 - MyTforms Maxmatches 300 MaxIter 100';
+input.imageSaveFolder = '..\..\..\..\..\..\Team Work\Team CrackSTITCH\Results\AutoPanoStitch\Spherical 1 - MyTforms Maxmatches 300 MaxIter 100 Fglobal';
 
 %% Inputs 2
 %--------------------------------------------------------------------------
@@ -78,10 +78,10 @@ input.EdgeThreshold = 6;                                % Edge threshold, specif
                                                         % The threshold is used to filter out unstable edge-like features  -- SIFT only
 
 % Features matching
-input.k = 4;                                            % Brown-Lowe uses k=4
+input.k = 10;                                           % Brown-Lowe uses k=4
 input.BFMatch = 0;                                      % Brute-force matcher for the binary features in global feature matching
 input.matchFeaturesPairwise = 0;                        % Match features by pairwise images or globally
-input.useMATLABFeatureMatch = 1;                        % Use MATLAB default matchFeatures function: 0-off | 1-on (very fast)
+input.useMATLABFeatureMatch = 1;                        % Use MATLAB default pairwise matchFeatures function: 0-off | 1-on (very fast)
 input.Matchingmethod = 'Approximate';                   % 'Exhaustive' (default) | 'Approximate'
 input.ApproxFloatNNMethod = 'subsetpdist2';             % Nearset neighbor finding methods: 'pca2nn' 'subsetpdist2'; 'kdtree'
                                                         % Speed: fast | slow | super slow
@@ -103,7 +103,7 @@ input.mBrownLowe = 6;                                   % Potential image matche
 
 % RANSAC execution time for projective case is ~1.35 times higher than MLESAC.
 input.maxIter = 500;                                    % RANSAC/MLESAC maximum iterations
-input.maxDistance = 5.5;                                % Maximum distance (pixels) increase this to get more matches. Default: 1.5
+input.maxDistance = 3.5;                                % Maximum distance (pixels) increase this to get more matches. Default: 1.5
                                                         % For large image RANSAC/MLESAC requires maxDistance 1-3+ pixels
                                                         % more than the default value of 3.5 pixels.
 input.inliersConfidence = 99.9;                         % Inlier confidence [0, 100]
@@ -111,7 +111,7 @@ input.transformationType = 'projective';                % Motion model: 'project
 input.showAdjacencyGraph = false;                       % Display image matching graph
 
 % Bundle adjustment (BA)
-input.maxIterLM = 40;                                   % Maximum Levenberg-Marquardt iterations   
+input.maxIterLM = 100;                                   % Maximum Levenberg-Marquardt iterations   
 input.lambda = 1e-3;                                    % Initial damping factor for LM
 input.sigmaHuber = 2.0;                                 % Huber loss function standard deviation
 input.verboseLM = false;                                % true - display LM iterations | false - silent

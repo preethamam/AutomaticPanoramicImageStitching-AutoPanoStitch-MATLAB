@@ -199,7 +199,14 @@ function out = ifelse(cond, valTrue, valFalse)
     %       s = ifelse(isempty(A), 0, sum(A)); % safe sum
     %
     %   See also IF, ELSE.
+    arguments
+        cond (1,1) {mustBeNumericOrLogical}
+        valTrue
+        valFalse
+    end
 
+    % Ensure the condition is logical (accepts numeric 0/1 as well)
+    cond = logical(cond);
     if cond
         out = valTrue;
     else
