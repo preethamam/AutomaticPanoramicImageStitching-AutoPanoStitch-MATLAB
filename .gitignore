@@ -18,6 +18,7 @@ node_modules
 *.pdf
 *.PDF
 *.asv
+*.dll
 
 # Ignore files
 scrachPaper.m
