@@ -41,7 +41,7 @@ input.EdgeThreshold = 6;                                % Edge threshold, specif
                                                         % The threshold is used to filter out unstable edge-like features  -- SIFT only
 
 % Features matching
-input.k = 10;                                           % Brown-Lowe uses k=4
+input.k = 10;                                           % Brown-Lowe uses k=4 (use many for some similar looking grayscale images)
 input.BFMatch = 0;                                      % Brute-force matcher for the binary features in global feature matching
 input.matchFeaturesPairwise = 0;                        % Match features by pairwise images or globally
 input.useMATLABFeatureMatch = 1;                        % Use MATLAB default pairwise matchFeatures function: 0-off | 1-on (very fast)
